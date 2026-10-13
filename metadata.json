@@ -1,0 +1,6 @@
+{
+  "name": "Multi-Disease Prediction System",
+  "description": "Full-stack health risk prediction system powered by local Scikit-Learn machine learning models for Heart Disease, Diabetes, Chronic Kidney Disease, and Liver Disease.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

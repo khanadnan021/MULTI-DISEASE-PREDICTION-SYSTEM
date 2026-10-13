@@ -1,0 +1,158 @@
+{
+  "heart": [
+    {
+      "name": "Healthy Patient (Negative / Low Risk)",
+      "expected_output": "No Heart Disease Detected (Healthy)",
+      "expected_class": 0,
+      "parameters": {
+        "age": 45,
+        "sex": 0,
+        "cp": 0,
+        "trestbps": 120,
+        "chol": 195,
+        "fbs": 0,
+        "restecg": 0,
+        "thalach": 172,
+        "exang": 0,
+        "oldpeak": 0.2,
+        "slope": 2,
+        "ca": 0,
+        "thal": 0
+      }
+    },
+    {
+      "name": "At-Risk Patient (Positive / Disease Detected)",
+      "expected_output": "Heart Disease Detected",
+      "expected_class": 1,
+      "parameters": {
+        "age": 63,
+        "sex": 1,
+        "cp": 3,
+        "trestbps": 152,
+        "chol": 298,
+        "fbs": 1,
+        "restecg": 1,
+        "thalach": 124,
+        "exang": 1,
+        "oldpeak": 2.6,
+        "slope": 1,
+        "ca": 2,
+        "thal": 2
+      }
+    }
+  ],
+  "diabetes": [
+    {
+      "name": "Healthy Patient (Negative / Low Risk)",
+      "expected_output": "No Diabetes Detected (Healthy)",
+      "expected_class": 0,
+      "parameters": {
+        "Pregnancies": 1,
+        "Glucose": 92,
+        "BloodPressure": 68,
+        "SkinThickness": 20,
+        "Insulin": 65,
+        "BMI": 22.4,
+        "DiabetesPedigreeFunction": 0.21,
+        "Age": 26
+      }
+    },
+    {
+      "name": "At-Risk Patient (Positive / Disease Detected)",
+      "expected_output": "Diabetes Detected",
+      "expected_class": 1,
+      "parameters": {
+        "Pregnancies": 6,
+        "Glucose": 168,
+        "BloodPressure": 86,
+        "SkinThickness": 35,
+        "Insulin": 190,
+        "BMI": 38.2,
+        "DiabetesPedigreeFunction": 0.84,
+        "Age": 52
+      }
+    }
+  ],
+  "kidney": [
+    {
+      "name": "Healthy Patient (Negative / Low Risk)",
+      "expected_output": "No Chronic Kidney Disease Detected (Healthy)",
+      "expected_class": 0,
+      "parameters": {
+        "age": 42,
+        "bp": 72,
+        "sg": 1.025,
+        "al": 0,
+        "su": 0,
+        "bgr": 98,
+        "bu": 28,
+        "sc": 0.85,
+        "sod": 142,
+        "pot": 4.2,
+        "hemo": 15.4,
+        "pcv": 47,
+        "wc": 6800,
+        "rc": 5.2,
+        "htn": 0
+      }
+    },
+    {
+      "name": "At-Risk Patient (Positive / Disease Detected)",
+      "expected_output": "Chronic Kidney Disease Detected",
+      "expected_class": 1,
+      "parameters": {
+        "age": 64,
+        "bp": 95,
+        "sg": 1.010,
+        "al": 3,
+        "su": 2,
+        "bgr": 210,
+        "bu": 92,
+        "sc": 4.5,
+        "sod": 130,
+        "pot": 5.4,
+        "hemo": 8.9,
+        "pcv": 28,
+        "wc": 11500,
+        "rc": 3.2,
+        "htn": 1
+      }
+    }
+  ],
+  "liver": [
+    {
+      "name": "Healthy Patient (Negative / Low Risk)",
+      "expected_output": "No Liver Disease Detected (Healthy)",
+      "expected_class": 0,
+      "parameters": {
+        "Age": 38,
+        "Gender": 0,
+        "Total_Bilirubin": 0.8,
+        "Direct_Bilirubin": 0.2,
+        "Alkaline_Phosphotase": 185,
+        "Alamine_Aminotransferase": 24,
+        "Aspartate_Aminotransferase": 28,
+        "Total_Proteins": 7.2,
+        "Albumin": 4.1,
+        "Albumin_and_Globulin_Ratio": 1.3
+      }
+    },
+    {
+      "name": "At-Risk Patient (Positive / Disease Detected)",
+      "expected_output": "Liver Disease Detected",
+      "expected_class": 1,
+      "parameters": {
+        "Age": 54,
+        "Gender": 1,
+        "Total_Bilirubin": 4.6,
+        "Direct_Bilirubin": 2.3,
+        "Alkaline_Phosphotase": 480,
+        "Alamine_Aminotransferase": 125,
+        "Aspartate_Aminotransferase": 160,
+        "Total_Proteins": 5.8,
+        "Albumin": 2.4,
+        "Albumin_and_Globulin_Ratio": 0.7
+      }
+    }
+  ]
+}
