@@ -334,6 +334,54 @@ export const BiomarkerVisualizer: React.FC<BiomarkerVisualizerProps> = ({ diseas
         ];
       }
 
+      case 'stroke': {
+        const glucose = getVal('avg_glucose_level', 100);
+        const bmi = getVal('bmi', 26);
+        const age = getVal('age', 55);
+
+        return [
+          {
+            key: 'glucose',
+            name: 'Average Blood Glucose',
+            value: glucose,
+            unit: 'mg/dL',
+            min: 60,
+            max: 300,
+            normalRange: [70, 110],
+            borderlineRange: [111, 140],
+            status: glucose >= 141 ? 'abnormal' : glucose >= 111 ? 'borderline' : 'normal',
+            statusLabel: glucose >= 141 ? 'Hyperglycemic' : glucose >= 111 ? 'Pre-Diabetic' : 'Normal',
+            clinicalNote: glucose >= 140 ? 'High glucose levels erode cerebral capillary linings' : 'Physiological vascular environment'
+          },
+          {
+            key: 'bmi',
+            name: 'Body Mass Index (BMI)',
+            value: bmi,
+            unit: 'kg/m²',
+            min: 15,
+            max: 55,
+            normalRange: [18.5, 24.9],
+            borderlineRange: [25.0, 29.9],
+            status: bmi >= 30 ? 'abnormal' : bmi >= 25 ? 'borderline' : 'normal',
+            statusLabel: bmi >= 30 ? 'Obesity (High Risk)' : bmi >= 25 ? 'Overweight' : 'Normal',
+            clinicalNote: bmi >= 30 ? 'Systemic vascular inflammation accelerating arterial stiffness' : 'Healthy weight profile'
+          },
+          {
+            key: 'age',
+            name: 'Patient Age Factor',
+            value: age,
+            unit: 'years',
+            min: 18,
+            max: 95,
+            normalRange: [18, 55],
+            borderlineRange: [56, 65],
+            status: age >= 66 ? 'abnormal' : age >= 56 ? 'borderline' : 'normal',
+            statusLabel: age >= 66 ? 'High Age Vulnerability' : age >= 56 ? 'Moderate Age' : 'Low Age Risk',
+            clinicalNote: age >= 65 ? 'Arterial compliance decreases naturally after 65' : 'Optimal vessel elasticity'
+          }
+        ];
+      }
+
       default:
         return [];
     }

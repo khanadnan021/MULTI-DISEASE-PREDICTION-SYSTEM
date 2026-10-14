@@ -103,7 +103,7 @@
       "parameters": {
         "age": 64,
         "bp": 95,
-        "sg": 1.010,
+        "sg": 1.01,
         "al": 3,
         "su": 2,
         "bgr": 210,
@@ -152,6 +152,34 @@
         "Total_Proteins": 5.8,
         "Albumin": 2.4,
         "Albumin_and_Globulin_Ratio": 0.7
+      }
+    }
+  ],
+  "stroke": [
+    {
+      "name": "Low Stroke Risk (Healthy Individual)",
+      "expected_output": "Low Stroke Risk Profile",
+      "expected_class": 0,
+      "parameters": {
+        "age": 32,
+        "hypertension": 0,
+        "heart_disease": 0,
+        "avg_glucose_level": 88.5,
+        "bmi": 22.8,
+        "smoking_status": 0
+      }
+    },
+    {
+      "name": "High Stroke Risk (Elderly Hypertensive Smoker)",
+      "expected_output": "Elevated Cerebrovascular Stroke Risk",
+      "expected_class": 1,
+      "parameters": {
+        "age": 68,
+        "hypertension": 1,
+        "heart_disease": 1,
+        "avg_glucose_level": 210.4,
+        "bmi": 33.2,
+        "smoking_status": 2
       }
     }
   ]

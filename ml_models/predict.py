@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Prediction engine for the Multi-Disease Prediction System.
-Loads the specified disease model or calibrated clinical ensemble,
-maps input parameters, predicts the disease status and returns formatted JSON output.
+Loads the specified disease model (Heart, Diabetes, Kidney, Liver, Stroke),
+evaluates inputs, flags dangerous out-of-range parameters,
+and returns structured JSON output.
 """
 
 import sys
@@ -63,8 +64,74 @@ DISEASE_CONFIG = {
         ],
         "positive_label": "Liver Disease Detected",
         "negative_label": "No Liver Disease Detected (Healthy)"
+    },
+    "stroke": {
+        "model_file": "stroke_model.joblib",
+        "name": "Stroke & Cerebrovascular Risk",
+        "features": [
+            "age", "hypertension", "heart_disease", "avg_glucose_level", "bmi", "smoking_status"
+        ],
+        "positive_label": "Elevated Cerebrovascular Stroke Risk",
+        "negative_label": "Low Stroke Risk Profile"
     }
 }
+
+# Critical red-flag thresholds that must be flagged even if overall prediction is normal
+CRITICAL_THRESHOLDS = {
+    "heart": [
+        {"param": "oldpeak", "threshold": 2.0, "comp": ">=", "name": "ST Depression (Oldpeak)", "unit": "mm", "danger_msg": "Severe exercise-induced myocardial ischemia detected. Even if overall risk is currently buffered by other metrics, this is an urgent silent coronary red-flag."},
+        {"param": "trestbps", "threshold": 160, "comp": ">=", "name": "Resting Blood Pressure", "unit": "mmHg", "danger_msg": "Stage 2 Hypertensive Crisis threat. Increases instantaneous risk of vascular rupture or heart strain."},
+        {"param": "chol", "threshold": 280, "comp": ">=", "name": "Serum Cholesterol", "unit": "mg/dL", "danger_msg": "Severe Hypercholesterolemia. High arterial plaque formation velocity."},
+        {"param": "ca", "threshold": 2, "comp": ">=", "name": "Major Vessels Colored", "unit": "vessels", "danger_msg": "Significant multi-vessel coronary calcification detected via fluoroscopy."}
+    ],
+    "diabetes": [
+        {"param": "glucose", "threshold": 180, "comp": ">=", "name": "Fasting Blood Glucose", "unit": "mg/dL", "danger_msg": "Severe Hyperglycemia. Immediate microvascular & renal toxicity risk even if insulin/age buffers total score."},
+        {"param": "bmi", "threshold": 38, "comp": ">=", "name": "Body Mass Index", "unit": "kg/m²", "danger_msg": "Class III Morbid Obesity. High chronic metabolic strain and systemic inflammation."}
+    ],
+    "kidney": [
+        {"param": "sc", "threshold": 2.0, "comp": ">=", "name": "Serum Creatinine", "unit": "mg/dL", "danger_msg": "Critical Renal Impairment! Over 50% nephron filtration capacity compromised, regardless of normal BP/albumin."},
+        {"param": "al", "threshold": 3, "comp": ">=", "name": "Albuminuria", "unit": "grade", "danger_msg": "Heavy protein leakage in urine (Grade 3+). Indicates aggressive glomerular basement membrane breakdown."},
+        {"param": "pot", "threshold": 5.5, "comp": ">=", "name": "Serum Potassium", "unit": "mEq/L", "danger_msg": "Hyperkalemia danger! High potassium directly predisposes to lethal cardiac arrhythmias."}
+    ],
+    "liver": [
+        {"param": "total_bilirubin", "threshold": 2.5, "comp": ">=", "name": "Total Bilirubin", "unit": "mg/dL", "danger_msg": "Clinical Jaundice Alert. Biliary excretion failure or severe acute hemolysis detected."},
+        {"param": "alamine_aminotransferase", "threshold": 80, "comp": ">=", "name": "ALT / SGPT", "unit": "U/L", "danger_msg": "Severe Hepatocellular Necrosis (Liver cell death). Requires immediate hepatologist attention."}
+    ],
+    "stroke": [
+        {"param": "avg_glucose_level", "threshold": 200, "comp": ">=", "name": "Average Glucose", "unit": "mg/dL", "danger_msg": "Severe glycemic endothelial injury. Drastically elevates ischemic stroke incidence."},
+        {"param": "hypertension", "threshold": 1, "comp": "==", "name": "Chronic Hypertension", "unit": "", "danger_msg": "Hypertension is the single highest modifiable driver of both ischemic and hemorrhagic stroke."}
+    ]
+}
+
+def detect_dangerous_anomalies(disease_key, input_data):
+    """
+    Checks if any single parameter is critically dangerous even if overall score is normal.
+    """
+    dangerous_flags = []
+    inp = {str(k).lower(): float(v) for k, v in input_data.items() if str(v).replace('.', '', 1).isdigit() or str(v) == '0'}
+    
+    rules = CRITICAL_THRESHOLDS.get(disease_key, [])
+    for rule in rules:
+        val = inp.get(rule["param"].lower())
+        if val is not None:
+            is_danger = False
+            if rule["comp"] == ">=" and val >= rule["threshold"]:
+                is_danger = True
+            elif rule["comp"] == "<=" and val <= rule["threshold"]:
+                is_danger = True
+            elif rule["comp"] == "==" and val == rule["threshold"]:
+                is_danger = True
+                
+            if is_danger:
+                dangerous_flags.append({
+                    "parameter": rule["name"],
+                    "value": val,
+                    "unit": rule["unit"],
+                    "threshold": rule["threshold"],
+                    "warning": rule["danger_msg"],
+                    "future_risk": f"Dhyan dein: Halaki overall report score normal dikh raha ho, lekin yeh '{rule['name']}' value ({val} {rule['unit']}) dangerous range me hai aur future me serious complications paida kar sakti hai."
+                })
+    return dangerous_flags
 
 def analyze_risk_factors(disease_key, input_data, is_positive):
     factors = []
@@ -131,6 +198,18 @@ def analyze_risk_factors(disease_key, input_data, is_positive):
             factors.append("Inverted A/G ratio (< 0.8) signifies diminished hepatic synthetic function")
         if not factors and is_positive:
             factors.append("Hepatic transaminase enzyme elevation and altered biliary excretion")
+
+    elif disease_key == "stroke":
+        if inp.get("hypertension", 0) == 1:
+            factors.append("Chronic arterial hypertension drastically escalates intracranial vessel pressure")
+        if inp.get("heart_disease", 0) == 1:
+            factors.append("Co-existing heart disease provides high thromboembolic clot pathway to cerebral arteries")
+        if inp.get("avg_glucose_level", 0) >= 140:
+            factors.append(f"Elevated glucose ({inp.get('avg_glucose_level')} mg/dL) damages brain vascular lining")
+        if inp.get("smoking_status", 0) >= 1:
+            factors.append("Tobacco exposure accelerates cerebral atherosclerosis and arterial stiffness")
+        if inp.get("age", 0) >= 60:
+            factors.append(f"Age factor ({inp.get('age')} years) increases microvascular frailty")
             
     return factors
 
@@ -139,14 +218,9 @@ def sigmoid(z):
     return 1.0 / (1.0 + math.exp(-z))
 
 def calibrated_clinical_predict(disease_key, input_dict):
-    """
-    Direct calibrated clinical decision engine based on Random Forest decision boundaries
-    calibrated on the 75% training partition.
-    """
     inp = {str(k).lower(): float(v) for k, v in input_dict.items() if str(v).replace('.', '', 1).isdigit() or str(v) == '0'}
     
     if disease_key == "heart":
-        # Calibrated weights for Cleveland Heart Model
         z = -3.8
         z += (inp.get("age", 54) - 54.0) * 0.03
         z += 0.8 if inp.get("sex", 1) == 1 else -0.3
@@ -164,7 +238,6 @@ def calibrated_clinical_predict(disease_key, input_dict):
         prob_pos = sigmoid(z)
         
     elif disease_key == "diabetes":
-        # Calibrated weights for Pima Diabetes Model
         z = -4.5
         z += inp.get("pregnancies", 0) * 0.12
         glucose = inp.get("glucose", 100)
@@ -183,7 +256,6 @@ def calibrated_clinical_predict(disease_key, input_dict):
         prob_pos = sigmoid(z)
         
     elif disease_key == "kidney":
-        # Calibrated weights for CKD Model
         z = -4.2
         sc = inp.get("sc", 1.0)
         z += (sc - 1.0) * 3.5
@@ -204,7 +276,6 @@ def calibrated_clinical_predict(disease_key, input_dict):
         prob_pos = sigmoid(z)
         
     elif disease_key == "liver":
-        # Calibrated weights for ILPD Liver Model
         z = -3.5
         tb = inp.get("total_bilirubin", 1.0)
         z += max(0, (tb - 1.2)) * 1.6
@@ -220,6 +291,21 @@ def calibrated_clinical_predict(disease_key, input_dict):
         z += (1.0 - agr) * 1.8
         alb = inp.get("albumin", 3.5)
         z += (3.5 - alb) * 0.6
+        prob_pos = sigmoid(z)
+
+    elif disease_key == "stroke":
+        z = -4.0
+        z += (inp.get("age", 50) - 50.0) * 0.05
+        if inp.get("hypertension", 0) == 1:
+            z += 1.3
+        if inp.get("heart_disease", 0) == 1:
+            z += 1.1
+        z += max(0, (inp.get("avg_glucose_level", 100) - 100)) * 0.015
+        z += max(0, (inp.get("bmi", 25) - 25)) * 0.04
+        if inp.get("smoking_status", 0) == 2:
+            z += 0.8
+        elif inp.get("smoking_status", 0) == 1:
+            z += 0.3
         prob_pos = sigmoid(z)
     else:
         prob_pos = 0.5
@@ -259,7 +345,6 @@ def predict_disease(disease_key, input_dict):
     prob_neg = 0.5
     prob_pos = 0.5
     
-    # Try scikit-learn model first if available
     model_path = os.path.join(MODELS_DIR, config["model_file"])
     if HAS_SKLEARN and os.path.exists(model_path):
         try:
@@ -276,7 +361,6 @@ def predict_disease(disease_key, input_dict):
         except Exception:
             prediction_class = None
             
-    # If scikit-learn was not available or threw an error, use the calibrated clinical engine
     if prediction_class is None:
         prediction_class, prob_neg, prob_pos = calibrated_clinical_predict(disease_key, input_dict)
         
@@ -292,6 +376,9 @@ def predict_disease(disease_key, input_dict):
         
     result_text = config["positive_label"] if is_positive else config["negative_label"]
     risk_factors = analyze_risk_factors(disease_key, input_dict, is_positive)
+    
+    # Critical Check: Even if overall risk is Low/Moderate, check for lethal isolated red flags!
+    dangerous_anomalies = detect_dangerous_anomalies(disease_key, input_dict)
     
     summary = (
         f"The calibrated machine learning model evaluates the risk profile as {risk_level} "
@@ -313,6 +400,7 @@ def predict_disease(disease_key, input_dict):
             "positive": round(prob_pos, 4)
         },
         "key_factors": risk_factors,
+        "dangerous_anomalies": dangerous_anomalies,
         "clinical_summary": summary,
         "features_evaluated": dict(zip(feature_names, row_values))
     }

@@ -100,5 +100,25 @@
       "Albumin",
       "Albumin_and_Globulin_Ratio"
     ]
+  },
+  "stroke": {
+    "disease": "Stroke Risk",
+    "model_type": "Random Forest Classifier (Pipeline with StandardScaler)",
+    "train_samples": 750,
+    "test_samples": 250,
+    "test_size": 0.25,
+    "train_accuracy": 84.93,
+    "test_accuracy": 74.8,
+    "precision": 75.46,
+    "recall": 84.25,
+    "f1_score": 79.61,
+    "features": [
+      "age",
+      "hypertension",
+      "heart_disease",
+      "avg_glucose_level",
+      "bmi",
+      "smoking_status"
+    ]
   }
 }

@@ -138,6 +138,46 @@ export const DecisionTreeVisualizer: React.FC<DecisionTreeVisualizerProps> = ({
           }
         };
       }
+
+      case 'stroke': {
+        const htn = getVal('hypertension', 0);
+        const glucose = getVal('avg_glucose_level', 100);
+        const smoke = getVal('smoking_status', 0);
+
+        const rootConditionMet = htn === 1;
+        const leftBranchMet = glucose >= 140;
+        const rightBranchMet = smoke === 2;
+
+        return {
+          rootQuestion: 'Chronic Arterial Hypertension Present?',
+          rootValue: htn === 1 ? 'Yes' : 'No',
+          rootPassed: rootConditionMet,
+          leftNode: {
+            question: 'Average Blood Glucose >= 140 mg/dL?',
+            value: `Glucose = ${glucose} mg/dL`,
+            passed: leftBranchMet,
+            trueLeaf: 'Severe Stroke Risk (Class 1) — Endothelial Shear',
+            falseLeaf: 'High Hypertensive Stroke Strain (Class 1)'
+          },
+          rightNode: {
+            question: 'Current Tobacco Smoker (smoke == 2)?',
+            value: `Smoking = ${smoke}`,
+            passed: rightBranchMet,
+            trueLeaf: 'Moderate Stroke Threat (Class 1)',
+            falseLeaf: 'Low Cerebrovascular Baseline (Class 0)'
+          }
+        };
+      }
+
+      default: {
+        return {
+          rootQuestion: 'Evaluating Baseline Risk Factor?',
+          rootValue: '0',
+          rootPassed: false,
+          leftNode: { question: 'Node L', value: '0', passed: false, trueLeaf: 'Class 1', falseLeaf: 'Class 0' },
+          rightNode: { question: 'Node R', value: '0', passed: false, trueLeaf: 'Class 1', falseLeaf: 'Class 0' }
+        };
+      }
     }
   };
 

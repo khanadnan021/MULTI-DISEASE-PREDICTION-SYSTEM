@@ -266,6 +266,62 @@ export const AnatomicalOrganView: React.FC<AnatomicalOrganViewProps> = ({
           )
         };
       }
+
+      case 'stroke': {
+        const bp = getVal('hypertension', 0);
+        const glucose = getVal('avg_glucose_level', 100);
+        const smoke = getVal('smoking_status', 0);
+        return {
+          organName: 'Cerebrovascular Circulation & Circle of Willis (Brain)',
+          statusText: isPositive ? 'Cerebral Microvascular Ischemia / Thromboembolic Risk' : 'Intact Intracranial Perfusion',
+          organTheme: 'emerald',
+          hotspots: [
+            {
+              name: 'Middle Cerebral Artery (MCA)',
+              status: bp === 1 ? 'High Arterial Shear Stress (Hypertensive)' : 'Normal Hemodynamic Flow',
+              risk: bp === 1
+            },
+            {
+              name: 'Endothelial Blood-Brain Barrier',
+              status: glucose >= 140 ? `Glycemic Endothelial Injury (${glucose} mg/dL)` : 'Intact Endothelial Tight Junctions',
+              risk: glucose >= 140
+            },
+            {
+              name: 'Internal Carotid Bifurcation',
+              status: smoke > 0 || isPositive ? 'Atherosclerotic Plaque / Embolic Threat' : 'Clear Carotid Lumen',
+              risk: smoke > 0 || isPositive
+            }
+          ],
+          renderSvg: () => (
+            <svg viewBox="0 0 160 160" className="w-28 h-28 shrink-0 drop-shadow-sm">
+              <defs>
+                <linearGradient id="brainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stopColor={isPositive ? '#ef4444' : '#10b981'} />
+                  <stop offset="100%" stopColor={isPositive ? '#991b1b' : '#047857'} />
+                </linearGradient>
+              </defs>
+              <path
+                d="M40 80 C 25 50, 45 25, 80 25 C 115 25, 135 50, 120 80 C 135 110, 105 135, 80 135 C 55 135, 25 110, 40 80 Z"
+                fill="url(#brainGrad)"
+                stroke={isPositive ? '#7f1d1d' : '#065f46'}
+                strokeWidth="3"
+              />
+              <path d="M80 30 Q 75 80 80 130" stroke="#ffffff" strokeWidth="2" strokeDasharray="3,3" />
+              <circle cx="65" cy="70" r="4.5" fill={isPositive ? '#ef4444' : '#10b981'} stroke="#fff" strokeWidth="1.5" />
+              <circle cx="95" cy="70" r="4.5" fill={isPositive ? '#ef4444' : '#10b981'} stroke="#fff" strokeWidth="1.5" />
+            </svg>
+          )
+        };
+      }
+      default: {
+        return {
+          organName: 'Systemic Organ System',
+          statusText: isPositive ? 'Pathology Present' : 'Normal Physiology',
+          organTheme: 'emerald',
+          hotspots: [],
+          renderSvg: () => <div />
+        };
+      }
     }
   };
 

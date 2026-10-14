@@ -225,6 +225,54 @@ export const HealthRadarChart: React.FC<HealthRadarChartProps> = ({
         ];
       }
 
+      case 'stroke': {
+        const age = getVal('age', 55);
+        const htn = getVal('hypertension', 0);
+        const hd = getVal('heart_disease', 0);
+        const gluc = getVal('avg_glucose_level', 100);
+        const bmi = getVal('bmi', 26);
+        const smoke = getVal('smoking_status', 0);
+
+        return [
+          {
+            biomarker: 'Age Factor',
+            patient: Math.min(100, Math.max(10, ((age - 25) / (85 - 25)) * 100)),
+            baseline: 30,
+            actualDisplay: `${age} yrs`
+          },
+          {
+            biomarker: 'Blood Glucose',
+            patient: Math.min(100, Math.max(10, ((gluc - 70) / (250 - 70)) * 100)),
+            baseline: 25,
+            actualDisplay: `${gluc} mg/dL`
+          },
+          {
+            biomarker: 'BMI Adiposity',
+            patient: Math.min(100, Math.max(10, ((bmi - 18) / (45 - 18)) * 100)),
+            baseline: 30,
+            actualDisplay: `${bmi} kg/m²`
+          },
+          {
+            biomarker: 'Hypertension',
+            patient: htn === 1 ? 90 : 15,
+            baseline: 20,
+            actualDisplay: htn === 1 ? 'Positive' : 'Normal'
+          },
+          {
+            biomarker: 'Heart Disease',
+            patient: hd === 1 ? 85 : 15,
+            baseline: 15,
+            actualDisplay: hd === 1 ? 'Positive' : 'None'
+          },
+          {
+            biomarker: 'Tobacco Exposure',
+            patient: smoke === 2 ? 95 : smoke === 1 ? 50 : 15,
+            baseline: 15,
+            actualDisplay: smoke === 2 ? 'Active Smoker' : smoke === 1 ? 'Former' : 'Non-Smoker'
+          }
+        ];
+      }
+
       default:
         return [];
     }

@@ -13,7 +13,7 @@ import {
   Cpu
 } from 'lucide-react';
 import { DiseaseKey } from '../types';
-import { HEART_FIELDS, DIABETES_FIELDS, KIDNEY_FIELDS, LIVER_FIELDS } from '../data/diseaseFields';
+import { HEART_FIELDS, DIABETES_FIELDS, KIDNEY_FIELDS, LIVER_FIELDS, STROKE_FIELDS } from '../data/diseaseFields';
 import testPreviewData from '../data/testDataPreview.json';
 
 interface TestDataModalProps {
@@ -82,6 +82,30 @@ const DATASET_INFO: Record<DiseaseKey, {
     filename: 'liver_test_25_percent.csv',
     downloadUrl: '/api/download-test-data/liver',
     fields: LIVER_FIELDS
+  },
+  stroke: {
+    title: 'Stroke & Cerebrovascular Risk (UCI)',
+    total: 1000,
+    train75: 750,
+    test25: 250,
+    positives: 145,
+    negatives: 105,
+    paramCount: 6,
+    filename: 'stroke_test_25_percent.csv',
+    downloadUrl: '/api/download-test-data/stroke',
+    fields: STROKE_FIELDS
+  },
+  other: {
+    title: 'Others / General Conditions',
+    total: 0,
+    train75: 0,
+    test25: 0,
+    positives: 0,
+    negatives: 0,
+    paramCount: 0,
+    filename: '',
+    downloadUrl: '',
+    fields: []
   }
 };
 
@@ -188,7 +212,7 @@ export const TestDataModal: React.FC<TestDataModalProps> = ({
         {/* Disease Selector Navigation Tabs */}
         <div className="bg-slate-850 border-b border-slate-800 px-6 py-2.5 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="flex items-center space-x-1.5 overflow-x-auto">
-            {(['heart', 'diabetes', 'kidney', 'liver'] as DiseaseKey[]).map((dKey) => {
+            {(['heart', 'diabetes', 'kidney', 'liver', 'stroke'] as DiseaseKey[]).map((dKey) => {
               const active = selectedDisease === dKey;
               const info = DATASET_INFO[dKey];
               return (

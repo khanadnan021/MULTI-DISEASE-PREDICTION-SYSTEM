@@ -204,6 +204,53 @@ export const ShapWaterfallChart: React.FC<ShapWaterfallChartProps> = ({
         ];
       }
 
+      case 'stroke': {
+        const htn = getVal('hypertension', 0);
+        const hd = getVal('heart_disease', 0);
+        const gluc = getVal('avg_glucose_level', 100);
+        const bmi = getVal('bmi', 26);
+        const smoke = getVal('smoking_status', 0);
+        const age = getVal('age', 55);
+
+        return [
+          {
+            featureName: 'Chronic Arterial Hypertension',
+            rawValue: htn === 1 ? 'Positive (Stage 2)' : 'Normal',
+            impact: htn === 1 ? +35 : -18,
+            direction: htn === 1 ? 'risk' : 'protective',
+            clinicalExplanation: htn === 1 ? 'Elevates shear wall stress and intracranial small-vessel remodeling' : 'Normal blood pressure protects cerebral arterioles'
+          },
+          {
+            featureName: 'Average Blood Glucose',
+            rawValue: `${gluc} mg/dL`,
+            impact: gluc >= 160 ? +26 : gluc >= 120 ? +12 : -15,
+            direction: gluc >= 120 ? 'risk' : 'protective',
+            clinicalExplanation: gluc >= 140 ? 'Hyperglycemia damages microvascular capillary endothelium' : 'Physiological glycemic range'
+          },
+          {
+            featureName: 'Tobacco Exposure (Smoking)',
+            rawValue: smoke === 2 ? 'Active Smoker' : smoke === 1 ? 'Former' : 'Never Smoked',
+            impact: smoke === 2 ? +24 : smoke === 1 ? +10 : -14,
+            direction: smoke > 0 ? 'risk' : 'protective',
+            clinicalExplanation: smoke === 2 ? 'Free radicals accelerate arterial stiffening and thrombus formation' : 'No active tobacco vasoconstriction'
+          },
+          {
+            featureName: 'Co-existing Cardiac Pathology',
+            rawValue: hd === 1 ? 'Present' : 'None',
+            impact: hd === 1 ? +22 : -12,
+            direction: hd === 1 ? 'risk' : 'protective',
+            clinicalExplanation: hd === 1 ? 'Cardioembolic source can dislodge clots to middle cerebral artery' : 'No cardiogenic embolic risk'
+          },
+          {
+            featureName: 'Patient Age Stratification',
+            rawValue: `${age} yrs`,
+            impact: age >= 65 ? +18 : age >= 55 ? +8 : -10,
+            direction: age >= 60 ? 'risk' : 'protective',
+            clinicalExplanation: age >= 60 ? 'Age-related loss of cerebral vascular compliance' : 'Youthful arterial compliance'
+          }
+        ];
+      }
+
       default:
         return [];
     }

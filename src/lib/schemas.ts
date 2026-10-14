@@ -59,9 +59,20 @@ export const liverSchema = z.object({
   Albumin_and_Globulin_Ratio: z.coerce.number().min(0.2, "A/G ratio must be >= 0.2").max(3.0, "A/G ratio must be <= 3.0"),
 });
 
+export const strokeSchema = z.object({
+  age: z.coerce.number().min(18, "Age must be >= 18").max(110, "Age must be <= 110"),
+  hypertension: z.coerce.number().int().min(0).max(1),
+  heart_disease: z.coerce.number().int().min(0).max(1),
+  avg_glucose_level: z.coerce.number().min(50, "Average glucose must be >= 50 mg/dL").max(350, "Average glucose must be <= 350 mg/dL"),
+  bmi: z.coerce.number().min(14, "BMI must be >= 14.0 kg/m²").max(65, "BMI must be <= 65.0 kg/m²"),
+  smoking_status: z.coerce.number().int().min(0).max(2),
+});
+
 export const DISEASE_SCHEMAS: Record<DiseaseKey, z.ZodObject<any>> = {
   heart: heartSchema,
   diabetes: diabetesSchema,
   kidney: kidneySchema,
   liver: liverSchema,
+  stroke: strokeSchema,
+  other: z.object({}), // 'other' tab uses AI chat, no structured schema
 };

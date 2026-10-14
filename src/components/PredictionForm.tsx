@@ -10,8 +10,9 @@ import {
   FlaskConical, 
   HeartPulse, 
   SlidersHorizontal,
-  ChevronRight,
-  Info
+  Info,
+  Brain,
+  Sparkles
 } from 'lucide-react';
 import { DiseaseKey, PredictionResult, SampleCase } from '../types';
 import { DISEASE_CONFIGS, DISEASE_FIELDS, FieldDefinition } from '../data/diseaseFields';
@@ -32,12 +33,11 @@ interface PredictionFormProps {
   externalFormData?: Record<string, any> | null;
 }
 
-// Group definitions for clinical readability
 const FIELD_GROUPS: Record<DiseaseKey, { title: string; subtitle: string; icon: any; fields: string[] }[]> = {
   heart: [
     {
       title: 'Vitals & Demographics',
-      subtitle: 'Patient age, biological sex, and hemodynamic measurements',
+      subtitle: 'Patient age, biological sex, and resting blood pressure',
       icon: HeartPulse,
       fields: ['age', 'sex', 'trestbps', 'thalach'],
     },
@@ -102,18 +102,33 @@ const FIELD_GROUPS: Record<DiseaseKey, { title: string; subtitle: string; icon: 
       fields: ['Total_Bilirubin', 'Direct_Bilirubin', 'Alkaline_Phosphotase'],
     },
     {
-      title: 'Hepatic Transaminase Necrosis',
-      subtitle: 'Intracellular hepatocellular enzymes ALT/SGPT and AST/SGOT',
+      title: 'Hepatocellular Enzyme Profile',
+      subtitle: 'Transaminases indicating hepatic cellular injury',
       icon: Activity,
       fields: ['Alamine_Aminotransferase', 'Aspartate_Aminotransferase'],
     },
     {
-      title: 'Hepatic Protein Synthesis & Demographics',
-      subtitle: 'Serum proteins, albumin ratio, and patient profile',
+      title: 'Synthetic Function & Patient Bio',
+      subtitle: 'Serum proteins and albumin ratios',
       icon: Layers,
-      fields: ['Total_Proteins', 'Albumin', 'Albumin_and_Globulin_Ratio', 'Age', 'Gender'],
+      fields: ['Age', 'Gender', 'Total_Proteins', 'Albumin', 'Albumin_and_Globulin_Ratio'],
     },
   ],
+  stroke: [
+    {
+      title: 'Cerebrovascular & Neurological Profile',
+      subtitle: 'Vascular history and intracranial arterial stress metrics',
+      icon: Brain,
+      fields: ['age', 'hypertension', 'heart_disease'],
+    },
+    {
+      title: 'Metabolic & Lifestyle Accelerators',
+      subtitle: 'Glycemic endothelial damage, adiposity, and tobacco exposure',
+      icon: Activity,
+      fields: ['avg_glucose_level', 'bmi', 'smoking_status'],
+    }
+  ],
+  other: [], // 'other' tab uses Dr. Aria AI chat — no structured prediction form
 };
 
 export const PredictionForm: React.FC<PredictionFormProps> = ({
@@ -122,54 +137,50 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
   onClearResult,
   samples,
   currentResult,
-  modelAccuracy = 86.8,
+  modelAccuracy,
   externalFormData,
 }) => {
-  const currentConfig = DISEASE_CONFIGS.find((c) => c.id === disease)!;
-  const allFields = DISEASE_FIELDS[disease];
-  const fieldGroups = FIELD_GROUPS[disease];
+  const [submitting, setSubmitting] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
-  const [loading, setLoading] = useState(false);
-  const [serverError, setServerError] = useState<string | null>(null);
+  const fields = DISEASE_FIELDS[disease] || [];
+  const currentConfig = DISEASE_CONFIGS.find((c) => c.id === disease) || DISEASE_CONFIGS[0];
 
-  // Derive initial values from field definitions
-  const getInitialDefaults = () => {
-    const initial: Record<string, any> = {};
-    allFields.forEach((f) => {
-      initial[f.name] = f.defaultValue;
+  const getDefaultValues = () => {
+    const defaults: Record<string, any> = {};
+    fields.forEach((field) => {
+      defaults[field.name] = field.defaultValue;
     });
-    return initial;
+    return defaults;
   };
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    setValue,
-    formState: { errors },
-  } = useForm({
+  const form = useForm({
     resolver: zodResolver(DISEASE_SCHEMAS[disease]),
-    defaultValues: getInitialDefaults(),
-    mode: 'onTouched',
+    defaultValues: getDefaultValues(),
+    mode: 'onChange',
   });
 
-  // Reinitialize form when disease changes
-  useEffect(() => {
-    reset(getInitialDefaults());
-    setServerError(null);
-  }, [disease]);
+  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = form;
 
-  // Handle external data injection from 25% test data modal
+  // Sync external prefilled data (from report upload)
   useEffect(() => {
-    if (externalFormData && Object.keys(externalFormData).length > 0) {
-      reset(externalFormData);
-      setServerError(null);
+    if (externalFormData) {
+      Object.entries(externalFormData).forEach(([key, val]) => {
+        setValue(key as any, val, { shouldValidate: true, shouldDirty: true });
+      });
     }
-  }, [externalFormData]);
+  }, [externalFormData, setValue]);
+
+  // Reset form when disease changes
+  useEffect(() => {
+    reset(getDefaultValues());
+    onClearResult();
+    setApiError(null);
+  }, [disease, reset]);
 
   const onSubmit = async (data: Record<string, any>) => {
-    setLoading(true);
-    setServerError(null);
+    setSubmitting(true);
+    setApiError(null);
 
     try {
       const response = await fetch(`/api/predict/${disease}`, {
@@ -179,208 +190,246 @@ export const PredictionForm: React.FC<PredictionFormProps> = ({
       });
 
       if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.message || `Server responded with status ${response.status}`);
+        const errJson = await response.json();
+        throw new Error(errJson.message || `HTTP ${response.status}: Prediction failed`);
       }
 
       const result: PredictionResult = await response.json();
       onPredictionComplete(result);
-
-      // Smooth scroll to results
-      const anchor = document.getElementById('prediction-result-anchor');
-      if (anchor) {
-        anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
     } catch (err: any) {
-      console.error('Prediction API error:', err);
-      setServerError(err.message || 'Error executing ML pipeline inference.');
+      setApiError(err.message || 'Error occurred while contacting clinical ML engine');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const handleReset = () => {
-    reset(getInitialDefaults());
-    setServerError(null);
-    onClearResult();
+  const handleApplySample = (sample: SampleCase) => {
+    Object.entries(sample.parameters).forEach(([k, v]) => {
+      setValue(k as any, v, { shouldValidate: true });
+    });
+    setApiError(null);
   };
+
+  const currentSamples = samples ? samples[disease] || [] : [];
+  const groups = FIELD_GROUPS[disease] || [{ title: 'All Biomarkers', subtitle: 'Clinical Inputs', icon: Activity, fields: fields.map(f => f.name) }];
+
+  // Watch form values for live layman colored sliders
+  const formValues = watch();
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-white p-5 sm:p-6 rounded-xl border border-[#E2E8F0] shadow-xs">
-        <div>
-          <div className="flex items-center space-x-2.5">
-            <h3 className="text-lg sm:text-xl text-[#172033] font-bold tracking-tight">
-              Patient Clinical Parameter Input
-            </h3>
-            <span className="font-mono text-xs sm:text-sm font-bold text-[#166534] bg-[#DCFCE7] border border-emerald-200 px-3 py-0.5 rounded-md">
-              {allFields.length} Features
-            </span>
+      {/* Sample Cohort Preloader Pill */}
+      {currentSamples.length > 0 && (
+        <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <SlidersHorizontal className="w-4 h-4 text-emerald-700" />
+            <span className="text-xs font-bold text-emerald-950">Quick-Load Verified Test Patients:</span>
           </div>
-          <p className="mt-1 text-xs sm:text-sm text-[#64748B] font-medium">
-            Calibrated inputs for the {currentConfig.title} Random Forest classifier. All fields undergo strict physiological boundary checks.
-          </p>
-        </div>
-
-        <div className="flex items-center space-x-2 shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleReset}
-            className="h-9 px-3.5 text-xs sm:text-sm font-semibold text-[#172033] hover:text-[#166534] rounded-lg border-[#E2E8F0] bg-white hover:bg-[#F7FAF9] hover:border-emerald-300 shadow-2xs"
-          >
-            <RotateCcw className="w-4 h-4 mr-1.5 text-[#64748B]" />
-            Reset Baseline
-          </Button>
-        </div>
-      </div>
-
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        {/* Server error notification */}
-        {serverError && (
-          <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-start space-x-2.5 shadow-2xs">
-            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-bold text-rose-900">Inference Error: </span>
-              <span>{serverError}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Form categorized into physiological panels inside distinct cards */}
-        {fieldGroups.map((group, gIdx) => {
-          const GroupIcon = group.icon;
-          const groupFieldDefs = allFields.filter((f) => group.fields.includes(f.name));
-
-          if (groupFieldDefs.length === 0) return null;
-
-          return (
-            <div 
-              key={gIdx} 
-              className="rounded-xl border border-[#E2E8F0] bg-white shadow-xs p-5 sm:p-6 transition-all hover:border-emerald-300/80"
-            >
-              <div className="flex items-center justify-between pb-4 mb-5 border-b border-slate-100">
-                <div className="flex items-center space-x-3.5">
-                  <div className="w-10 h-10 rounded-lg bg-[#DCFCE7]/70 text-[#166534] flex items-center justify-center border border-emerald-200/80 shadow-2xs">
-                    <GroupIcon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h4 className="text-base sm:text-lg font-bold text-[#172033] tracking-tight">
-                      {group.title}
-                    </h4>
-                    <p className="text-xs sm:text-sm text-[#64748B] font-medium">{group.subtitle}</p>
-                  </div>
-                </div>
-                <span className="text-xs sm:text-sm font-bold text-[#64748B] bg-[#F7FAF9] border border-[#E2E8F0] px-2.5 py-1 rounded-md font-mono shadow-2xs">
-                  {groupFieldDefs.length} parameters
+          <div className="flex flex-wrap gap-2">
+            {currentSamples.map((sample, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleApplySample(sample)}
+                className={`text-xs px-3 py-1.5 rounded-xl font-semibold border transition shadow-xs flex items-center gap-1.5 ${
+                  sample.expected_class === 1
+                    ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                    : 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
+                }`}
+              >
+                <span>{sample.name}</span>
+                <span className="text-[10px] opacity-75 font-mono">
+                  ({sample.expected_class === 1 ? 'High Risk' : 'Healthy'})
                 </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                {groupFieldDefs.map((field) => {
-                  const error = errors[field.name];
-
-                  return (
-                    <div key={field.name} className="space-y-1.5">
-                      <Label
-                        htmlFor={field.name}
-                        unit={field.unit}
-                        normalRange={field.normalRange}
-                      >
-                        {field.label}
-                      </Label>
-
-                      {field.type === 'select' ? (
-                        <div className="relative">
-                          <select
-                            id={field.name}
-                            {...register(field.name, { valueAsNumber: true })}
-                            className={`flex h-11 sm:h-12 w-full appearance-none rounded-lg border bg-white px-4 py-2 text-base font-semibold text-[#172033] shadow-2xs transition-all duration-200 hover:border-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#16A34A]/20 focus:border-[#16A34A] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer ${
-                              error
-                                ? 'border-rose-500 focus:ring-rose-500/20 bg-rose-50/50 text-rose-900'
-                                : 'border-[#E2E8F0]'
-                            }`}
-                          >
-                            {field.options?.map((opt) => (
-                              <option key={opt.value} value={opt.value} className="bg-white text-[#172033] font-medium">
-                                {opt.label}
-                              </option>
-                            ))}
-                          </select>
-                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3.5 text-slate-400">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                            </svg>
-                          </div>
-                        </div>
-                      ) : (
-                        <Input
-                          id={field.name}
-                          type="number"
-                          step={field.step || (field.name === 'BMI' || field.name === 'oldpeak' || field.name === 'DiabetesPedigreeFunction' || field.name.includes('Bilirubin') || field.name.includes('Ratio') || field.name === 'sc' ? '0.01' : '1')}
-                          placeholder={field.placeholder || `e.g. ${field.defaultValue}`}
-                          error={!!error}
-                          {...register(field.name, { valueAsNumber: true })}
-                        />
-                      )}
-
-                      {error && (
-                        <p className="text-xs text-rose-600 flex items-center gap-1 font-mono pt-1 font-medium">
-                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span>{error.message as string}</span>
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Action Controls Footer */}
-        <div className="p-5 sm:p-6 bg-white rounded-xl border border-[#E2E8F0] shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center space-x-2 text-xs text-[#64748B]">
-            <Info className="w-4 h-4 text-[#0F766E] shrink-0" />
-            <span className="font-medium">
-              Inference is calculated in real-time by the Python ensemble pipeline with probability calibration.
-            </span>
+              </button>
+            ))}
           </div>
+        </div>
+      )}
 
-          <div className="flex items-center space-x-3 w-full sm:w-auto">
+      {/* Main Clinical Card */}
+      <Card className="border-emerald-200 shadow-sm bg-white overflow-hidden rounded-2xl">
+        <CardHeader className="bg-gradient-to-r from-emerald-50/70 to-white border-b border-emerald-100 p-5 sm:p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <CardTitle className="text-xl font-bold text-emerald-950 tracking-tight">
+                  {currentConfig.title} Biomarker Assessment
+                </CardTitle>
+                <Badge className="bg-emerald-600 text-white border-emerald-700 text-xs font-semibold px-2.5 py-0.5">
+                  Accuracy: {modelAccuracy ? `${modelAccuracy}%` : 'Calibrated'}
+                </Badge>
+              </div>
+              <CardDescription className="text-xs text-emerald-800/80 mt-1">
+                {currentConfig.subtitle} &bull; Visual sliders alert on normal (green), warning (yellow), and dangerous (red) zones.
+              </CardDescription>
+            </div>
             <Button
               type="button"
               variant="outline"
-              onClick={handleReset}
-              disabled={loading}
-              className="w-1/2 sm:w-auto text-xs rounded-lg border-[#E2E8F0] bg-white text-[#172033] hover:text-[#166534] hover:bg-[#F7FAF9] hover:border-emerald-300"
+              size="sm"
+              onClick={() => {
+                reset(getDefaultValues());
+                onClearResult();
+              }}
+              className="border-emerald-200 text-emerald-800 hover:bg-emerald-50 text-xs font-semibold rounded-xl"
             >
-              <RotateCcw className="w-3.5 h-3.5 mr-1.5 text-[#64748B]" />
-              Clear
-            </Button>
-
-            <Button
-              type="submit"
-              variant="clinical"
-              disabled={loading}
-              className="w-1/2 sm:w-auto text-xs font-semibold px-6 py-2.5 rounded-lg shadow-xs bg-[#166534] hover:bg-[#14532D] text-white border-0"
-            >
-              {loading ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin mr-2" />
-                  <span>Evaluating Pipeline...</span>
-                </>
-              ) : (
-                <>
-                  <Activity className="w-3.5 h-3.5 mr-2" />
-                  <span>Execute Risk Assessment</span>
-                </>
-              )}
+              <RotateCcw className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+              Reset All
             </Button>
           </div>
-        </div>
-      </form>
+        </CardHeader>
+
+        <CardContent className="p-5 sm:p-6">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
+            {groups.map((group, gIdx) => {
+              const GroupIcon = group.icon;
+              return (
+                <div key={gIdx} className="space-y-4">
+                  {/* Group Header */}
+                  <div className="flex items-center gap-2 pb-2 border-b border-gray-100">
+                    <span className="p-1.5 bg-emerald-100 text-emerald-800 rounded-lg">
+                      <GroupIcon className="w-4 h-4" />
+                    </span>
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                        {group.title}
+                      </h4>
+                      <p className="text-[11px] text-gray-500">{group.subtitle}</p>
+                    </div>
+                  </div>
+
+                  {/* Input Fields Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {group.fields.map((fieldName) => {
+                      const field = fields.find((f) => f.name === fieldName);
+                      if (!field) return null;
+
+                      const val = formValues[fieldName];
+                      const isDanger = field.criticalThreshold && val >= field.criticalThreshold;
+                      const isWarn = field.warningThreshold && val >= field.warningThreshold && !isDanger;
+
+                      return (
+                        <div key={field.name} className="space-y-1.5 bg-gray-50/60 p-3.5 rounded-xl border border-gray-200/70 hover:border-emerald-300 transition">
+                          <div className="flex items-center justify-between">
+                            <Label htmlFor={field.name} className="text-xs font-bold text-gray-800 truncate">
+                              {field.label}
+                            </Label>
+                            {field.unit && (
+                              <span className="text-[10px] font-mono font-medium text-gray-500 bg-white px-1.5 py-0.5 rounded border border-gray-200">
+                                {field.unit}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Layman Sub-Label */}
+                          {field.laymanLabel && (
+                            <p className="text-[11px] text-emerald-800 font-medium">
+                              {field.laymanLabel}
+                            </p>
+                          )}
+
+                          {/* Field Input (Number or Select) */}
+                          {field.type === 'select' ? (
+                            <select
+                              id={field.name}
+                              {...register(field.name as any, { valueAsNumber: true })}
+                              className="w-full text-xs bg-white border border-gray-300 rounded-lg p-2 font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                            >
+                              {field.options?.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <Input
+                              id={field.name}
+                              type="number"
+                              step={field.step || 'any'}
+                              min={field.min}
+                              max={field.max}
+                              placeholder={field.placeholder}
+                              {...register(field.name as any, { valueAsNumber: true })}
+                              className={`bg-white text-xs font-medium ${
+                                isDanger ? 'border-red-500 ring-1 ring-red-500' : isWarn ? 'border-amber-400' : 'border-gray-300'
+                              }`}
+                            />
+                          )}
+
+                          {/* Colored Status Range Bar (Layman Visual Range) */}
+                          {field.type === 'number' && (
+                            <div className="pt-1 space-y-1">
+                              <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden flex">
+                                <div className="h-full bg-emerald-500 w-1/2" title="Normal Range" />
+                                <div className="h-full bg-amber-400 w-1/4" title="Borderline Warning" />
+                                <div className="h-full bg-red-500 w-1/4" title="Dangerous High Zone" />
+                              </div>
+                              <div className="flex justify-between text-[10px] text-gray-500">
+                                <span>{field.normalRange || 'Normal Range'}</span>
+                                {isDanger ? (
+                                  <span className="text-red-600 font-bold">Critical High!</span>
+                                ) : isWarn ? (
+                                  <span className="text-amber-600 font-semibold">Borderline</span>
+                                ) : (
+                                  <span className="text-emerald-700 font-medium">Normal</span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {errors[field.name] && (
+                            <p className="text-[10px] text-red-600 font-medium flex items-center gap-1 mt-1">
+                              <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                              {(errors[field.name]?.message as string) || 'Invalid value'}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Error Message */}
+            {apiError && (
+              <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-800 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
+                <div className="space-y-1">
+                  <span className="font-bold">Prediction Failed:</span>
+                  <p>{apiError}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Submit Bar */}
+            <div className="pt-4 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>Runs Scikit-Learn Model + Gemini Multi-Modal Engine</span>
+              </div>
+              <Button
+                type="submit"
+                disabled={submitting}
+                className="w-full sm:w-auto px-8 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition flex items-center justify-center gap-2 text-sm"
+              >
+                {submitting ? (
+                  <>
+                    <Activity className="w-4 h-4 animate-spin" />
+                    Calculating Clinical Risk...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    Generate Multi-Disease Diagnosis
+                  </>
+                )}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 };
