@@ -103,12 +103,22 @@ CRITICAL_THRESHOLDS = {
     ]
 }
 
+def _is_numeric(v):
+    """Robustly check if a value is numeric (int or float, including negatives)."""
+    try:
+        float(str(v))
+        return True
+    except (ValueError, TypeError):
+        return False
+
 def detect_dangerous_anomalies(disease_key, input_data):
     """
     Checks if any single parameter is critically dangerous even if overall score is normal.
+    Preserves exact float precision — no rounding or truncation applied.
     """
     dangerous_flags = []
-    inp = {str(k).lower(): float(v) for k, v in input_data.items() if str(v).replace('.', '', 1).isdigit() or str(v) == '0'}
+    # Build case-insensitive lookup that preserves exact float values
+    inp = {str(k).lower(): float(str(v)) for k, v in input_data.items() if _is_numeric(v)}
     
     rules = CRITICAL_THRESHOLDS.get(disease_key, [])
     for rule in rules:
@@ -135,7 +145,8 @@ def detect_dangerous_anomalies(disease_key, input_data):
 
 def analyze_risk_factors(disease_key, input_data, is_positive):
     factors = []
-    inp = {str(k).lower(): float(v) for k, v in input_data.items() if str(v).replace('.', '', 1).isdigit() or str(v) == '0'}
+    # Case-insensitive lookup preserving exact float precision
+    inp = {str(k).lower(): float(str(v)) for k, v in input_data.items() if _is_numeric(v)}
     
     if disease_key == "heart":
         if inp.get("oldpeak", 0) >= 1.5:
@@ -218,7 +229,8 @@ def sigmoid(z):
     return 1.0 / (1.0 + math.exp(-z))
 
 def calibrated_clinical_predict(disease_key, input_dict):
-    inp = {str(k).lower(): float(v) for k, v in input_dict.items() if str(v).replace('.', '', 1).isdigit() or str(v) == '0'}
+    # Case-insensitive lookup preserving exact float precision — no rounding, no truncation
+    inp = {str(k).lower(): float(str(v)) for k, v in input_dict.items() if _is_numeric(v)}
     
     if disease_key == "heart":
         z = -3.8

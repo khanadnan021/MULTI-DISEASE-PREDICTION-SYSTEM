@@ -396,25 +396,44 @@ def parse_report(disease_key: str, text_content: str) -> dict:
                     pass
 
     # ── Clinical Semantics & Cross-Field Conversions ─────────────────────────
-    # Fasting blood sugar / glucose handling
-    raw_glucose = extracted.get("glucose", extracted.get("fbs", extracted.get("avg_glucose_level", extracted.get("bgr"))))
+    # PRECISION RULE: Never overwrite an already-extracted independent field.
+    # Only alias values to MISSING fields. Preserve exact float values throughout.
+
+    # Determine individual extracted values first (no chained fallback that loses source identity)
+    _glucose_extracted = extracted.get("glucose") if extracted.get("glucose") is not None else extracted.get("Glucose")
+    _fbs_extracted = extracted.get("fbs")
+    _avg_glucose_extracted = extracted.get("avg_glucose_level")
+    _bgr_extracted = extracted.get("bgr")
+
+    # raw_glucose = first available non-None glucose source (excluding fbs which may be binary)
+    raw_glucose = _glucose_extracted if _glucose_extracted is not None else (
+        _avg_glucose_extracted if _avg_glucose_extracted is not None else _bgr_extracted
+    )
+
     if raw_glucose is not None:
         extracted["_raw_glucose"] = raw_glucose
+        # Only fill MISSING fields — never overwrite extracted values
         if "glucose" not in extracted:
             extracted["glucose"] = raw_glucose
+        if "Glucose" not in extracted:
             extracted["Glucose"] = raw_glucose
         if "avg_glucose_level" not in extracted:
             extracted["avg_glucose_level"] = raw_glucose
         if "bgr" not in extracted:
             extracted["bgr"] = raw_glucose
 
-    # Heart model requires binary fbs (1 if fasting blood sugar > 120 or binary input is 1, else 0)
+    # Heart model requires BINARY fbs: 1 if fasting glucose > 120 mg/dL, else 0.
+    # If fbs was extracted as an actual glucose concentration (> 2.0), convert to binary.
+    # If fbs was already binary (0 or 1), preserve it unchanged.
     if "fbs" in extracted:
-        fbs_val = float(extracted["fbs"])
-        extracted["fbs"] = 1.0 if (fbs_val == 1.0 or fbs_val >= 120.0) else 0.0
+        fbs_raw = float(extracted["fbs"])
+        if fbs_raw > 2.0:
+            # It's a raw glucose reading — convert to binary threshold
+            extracted["fbs"] = 1.0 if fbs_raw >= 120.0 else 0.0
+        # else: already binary (0 or 1) — keep exact value
     elif raw_glucose is not None and "fbs" in required_features:
-        gluc_val = float(raw_glucose)
-        extracted["fbs"] = 1.0 if (gluc_val == 1.0 or gluc_val >= 120.0) else 0.0
+        # fbs not extracted directly — derive binary flag from raw glucose value
+        extracted["fbs"] = 1.0 if float(raw_glucose) >= 120.0 else 0.0
 
     # Blood pressure aliases across diseases (trestbps in heart, bp in kidney, BloodPressure in diabetes)
     raw_bp = extracted.get("trestbps", extracted.get("bp", extracted.get("bloodpressure")))
