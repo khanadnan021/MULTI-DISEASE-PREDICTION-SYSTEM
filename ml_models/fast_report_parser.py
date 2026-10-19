@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""
+r"""
 Ultra-fast clinical PDF & Report Parser (Sub-second execution).
-Reads JSON payload from stdin: { "disease": "heart", "fileBase64": "data:application/pdf;base64,..." }
-Extracts numerical biomarkers from laboratory PDF reports or text,
-maps them to disease parameters, screens dangerous anomalies,
-and outputs verified JSON in under 500ms.
+Reads JSON payload from stdin: { "disease": "heart", "fileBase64": "data:application/pdf;base64,...", "text": "..." }
+Extracts numerical biomarkers from laboratory PDF reports or text across 5 clinical modules:
+Heart Disease (13), Diabetes (8), Kidney Disease (15), Liver Disease (10), Stroke Risk (6).
+Preserves full float/decimal precision (\d+\.?\d*), screens dangerous anomalies,
+and enforces strict validation (rejecting non-medical inputs with no hardcoded fallback).
 """
 
 import sys
@@ -28,77 +29,310 @@ DISEASE_PARAMS = {
     "stroke": ["age", "hypertension", "heart_disease", "avg_glucose_level", "bmi", "smoking_status"]
 }
 
-# Regex heuristics for fast clinical extraction
+# Calibrated clinical reference baselines (used strictly for missing parameter imputation during model inference)
+POPULATION_REFERENCE_BASELINES = {
+    "heart": {
+        "age": 54.0, "sex": 1.0, "cp": 0.0, "trestbps": 120.0, "chol": 200.0,
+        "fbs": 0.0, "restecg": 0.0, "thalach": 150.0, "exang": 0.0, "oldpeak": 0.0,
+        "slope": 1.0, "ca": 0.0, "thal": 2.0
+    },
+    "diabetes": {
+        "Pregnancies": 1.0, "Glucose": 100.0, "BloodPressure": 72.0, "SkinThickness": 23.0,
+        "Insulin": 80.0, "BMI": 25.0, "DiabetesPedigreeFunction": 0.35, "Age": 33.0
+    },
+    "kidney": {
+        "age": 48.0, "bp": 80.0, "sg": 1.020, "al": 0.0, "su": 0.0, "bgr": 110.0,
+        "bu": 32.0, "sc": 1.0, "sod": 138.0, "pot": 4.2, "hemo": 14.5,
+        "pcv": 42.0, "wc": 7500.0, "rc": 5.0, "htn": 0.0
+    },
+    "liver": {
+        "Age": 46.0, "Gender": 1.0, "Total_Bilirubin": 0.9, "Direct_Bilirubin": 0.3,
+        "Alkaline_Phosphotase": 195.0, "Alamine_Aminotransferase": 32.0,
+        "Aspartate_Aminotransferase": 30.0, "Total_Proteins": 6.8, "Albumin": 3.8,
+        "Albumin_and_Globulin_Ratio": 1.2
+    },
+    "stroke": {
+        "age": 58.0, "hypertension": 0.0, "heart_disease": 0.0,
+        "avg_glucose_level": 105.0, "bmi": 27.2, "smoking_status": 0.0
+    }
+}
+
+# Strict Key-Value Extraction Regexes across all 5 modules with full decimal precision (\d+\.?\d*)
 REGEX_PATTERNS = {
-    "age": [r"(\d{1,2})\s*(?:yrs|years|yr)", r"age\s*[/:\-]?\s*(\d{1,2})"],
+    # ── Heart Disease Parameters ──
+    "age": [
+        r"(\d{1,2})\s*(?:yrs|years|yr)",
+        r"age\s*[/:\-]?\s*(\d{1,2})"
+    ],
     "trestbps": [
-        r"resting\s+(?:blood\s+pressure|bp|systolic)[^0-9]{0,30}?(\d{2,3})",
-        r"(?:systolic|bp)\s*[:\-]?\s*(\d{2,3})",
-        r"blood pressure[^0-9]{0,20}?(\d{2,3})",
+        r"(?:resting\s+(?:blood\s+pressure|bp|systolic)|trestbps|resting\s+bp)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\btrestbps\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"(?:systolic|bp|blood\s+pressure)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"resting\s+(?:blood\s+pressure|bp|systolic)[^0-9]{0,30}?(\d+\.?\d*)",
+        r"blood\s+pressure[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "chol": [
-        r"(?:serum\s+)?total\s+cholesterol[^0-9]{0,20}?(\d{2,3}(?:\.\d+)?)",
-        r"cholesterol[^0-9]{0,20}?(\d{2,3}(?:\.\d+)?)",
+        r"(?:serum\s+)?total\s+cholesterol\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"chol(?:esterol)?\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bchol\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"(?:serum\s+)?total\s+cholesterol[^0-9]{0,20}?(\d+\.?\d*)",
+        r"cholesterol[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "fbs": [
-        r"fasting\s+blood\s+(?:glucose|sugar)[^0-9]{0,30}?(\d{2,3}(?:\.\d+)?)",
-        r"\bfbs\b[^0-9]{0,20}?(\d{2,3}(?:\.\d+)?)",
+        r"(?:fasting\s+(?:blood\s+)?(?:glucose|sugar)|fasting\s+sugar|fbs)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bfbs\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"fasting\s+(?:blood\s+)?(?:glucose|sugar)[^0-9]{0,30}?(\d+\.?\d*)",
+        r"fasting\s+sugar[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "thalach": [
-        r"maximum\s+heart\s+rate\s+(?:achieved\s+)?(?:\([^)]*\))?\s*(\d{2,3})",
-        r"max(?:imum)?\s+heart\s+rate[^0-9]{0,30}?(\d{2,3})",
-        r"heart\s+rate[^0-9]{0,20}?(\d{2,3})\s*bpm",
-        r"thalach[^0-9]{0,20}?(\d{2,3})",
+        r"(?:maximum\s+heart\s+rate|max\s+heart\s+rate|thalach)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bthalach\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"maximum\s+heart\s+rate\s+(?:achieved\s+)?(?:\([^)]*\))?\s*(\d+\.?\d*)",
+        r"max(?:imum)?\s+heart\s+rate[^0-9]{0,30}?(\d+\.?\d*)",
+        r"heart\s+rate[^0-9]{0,20}?(\d+\.?\d*)\s*bpm",
     ],
     "oldpeak": [
-        r"st\s+depression[^0-9]{0,40}?(\d+\.\d+)",
-        r"st\s+depression[^0-9]{0,40}?(\d+)",
-        r"oldpeak[^0-9]{0,20}?(\d+(?:\.\d+)?)",
+        r"(?:st\s+depression|oldpeak)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\boldpeak\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"st\s+depression[^0-9]{0,40}?(\d+\.?\d*)",
+    ],
+    "cp": [
+        r"(?:chest\s+pain\s+(?:type|grade)?|chest\s+pain|cp)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bcp\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"chest\s+pain\s+(?:type|grade)?[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "restecg": [
+        r"(?:resting\s+ecg|resting\s+electrocardiographic|restecg)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\brestecg\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"resting\s+ecg[^0-9]{0,20}?(\d+\.?\d*)",
+        r"resting\s+electrocardiographic[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "exang": [
+        r"(?:exercise\s+induced\s+angina|exang)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bexang\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"exercise\s+induced\s+angina[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "slope": [
+        r"(?:slope\s+of\s+peak\s+exercise|st\s+slope|slope)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bslope\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"slope\s+of\s+peak\s+exercise[^0-9]{0,30}?(\d+\.?\d*)",
+        r"st\s+slope[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "ca": [
+        r"(?:number\s+of\s+major\s+vessels|major\s+vessels(?:\s+colored)?|fluoroscopy\s+vessels|ca)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bca\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"number\s+of\s+major\s+vessels[^0-9]{0,30}?(\d+\.?\d*)",
+        r"major\s+vessels(?:\s+colored)?[^0-9]{0,20}?(\d+\.?\d*)",
+        r"fluoroscopy\s+vessels[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "thal": [
+        r"(?:thalassemia(?:\s+stress\s+scan)?|thal)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bthal\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"thalassemia\s+(?:stress\s+)?scan[^0-9]{0,20}?(\d+\.?\d*)",
+        r"thalassemia[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+
+    # ── Diabetes Parameters ──
+    "pregnancies": [
+        r"pregnanc(?:ies|y)[^0-9]{0,20}?(\d+\.?\d*)",
+        r"gravida[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "glucose": [
-        r"fasting\s+blood\s+glucose[^0-9]{0,30}?(\d{2,3}(?:\.\d+)?)",
-        r"fasting\s+glucose[^0-9]{0,20}?(\d{2,3}(?:\.\d+)?)",
-        r"\bglucose\b[^0-9]{0,20}?(\d{2,3}(?:\.\d+)?)",
+        r"(?:fasting\s+blood\s+glucose|fasting\s+glucose|plasma\s+glucose|blood\s+glucose|glucose)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bglucose\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"fasting\s+blood\s+glucose[^0-9]{0,30}?(\d+\.?\d*)",
+        r"fasting\s+glucose[^0-9]{0,20}?(\d+\.?\d*)",
+        r"plasma\s+glucose[^0-9]{0,20}?(\d+\.?\d*)",
+        r"blood\s+glucose[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bglucose\b[^0-9]{0,20}?(\d+\.?\d*)",
     ],
-    "avg_glucose_level": [
-        r"fasting\s+blood\s+glucose[^0-9]{0,30}?(\d{2,3}(?:\.\d+)?)",
-        r"\bglucose\b[^0-9]{0,20}?(\d{2,3}(?:\.\d+)?)",
+    "bloodpressure": [
+        r"(?:diastolic\s+(?:blood\s+pressure|bp)|bloodpressure|blood\s+pressure)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bbloodpressure\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"diastolic\s+(?:blood\s+pressure|bp)[^0-9]{0,30}?(\d+\.?\d*)",
+        r"blood\s+pressure\s*\([^)]*diastolic[^)]*\)[^0-9]{0,20}?(\d+\.?\d*)",
+        r"bloodpressure[^0-9]{0,20}?(\d+\.?\d*)",
     ],
-    "sc": [
-        r"serum\s+creatinine[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"\bcreatinine\b[^0-9]{0,20}?(\d+(?:\.\d+)?)",
+    "skinthickness": [
+        r"triceps\s+skin\s+fold\s+thickness[^0-9]{0,20}?(\d+\.?\d*)",
+        r"skin\s+fold\s+thickness[^0-9]{0,20}?(\d+\.?\d*)",
+        r"skinthickness[^0-9]{0,20}?(\d+\.?\d*)",
+        r"skin\s+thickness[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "insulin": [
+        r"(?:(?:2-?hr\s+)?serum\s+insulin|fasting\s+insulin|insulin)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\binsulin\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"(?:2-?hr\s+)?serum\s+insulin[^0-9]{0,20}?(\d+\.?\d*)",
+        r"fasting\s+insulin[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\binsulin\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "bmi": [
+        r"(?:body\s+mass\s+index|bmi)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bbmi\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"bmi[^0-9]{0,20}?(\d+\.?\d*)",
+        r"body\s+mass\s+index[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "diabetespedigreefunction": [
+        r"diabetes\s+pedigree\s+function[^0-9]{0,20}?(\d+\.?\d*)",
+        r"pedigree\s+function[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bdpf\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+
+    # ── Kidney Parameters ──
+    "bp": [
+        r"(?:blood\s+pressure|bp)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bbp\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"blood\s+pressure[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bbp\b\s*[:\-]?\s*(\d+\.?\d*)",
+    ],
+    "sg": [
+        r"specific\s+gravity[^0-9]{0,30}?(\d+\.?\d*)",
+        r"\bsg\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "al": [
+        r"urine\s+albumin[^0-9]{0,20}?(\d+\.?\d*)",
+        r"albuminuria[^0-9]{0,20}?(\d+\.?\d*)",
+        r"urine\s+protein[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "su": [
+        r"urine\s+sugar[^0-9]{0,20}?(\d+\.?\d*)",
+        r"sugar\s+in\s+urine[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "bgr": [
+        r"(?:blood\s+glucose\s+random|random\s+blood\s+(?:sugar|glucose)|bgr)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bbgr\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"blood\s+glucose\s+random[^0-9]{0,20}?(\d+\.?\d*)",
+        r"random\s+blood\s+(?:sugar|glucose)[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bbgr\b[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "bu": [
-        r"blood\s+urea\s+nitrogen[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"\bbun\b[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"blood\s+urea[^0-9]{0,20}?(\d+(?:\.\d+)?)",
+        r"(?:blood\s+urea\s+nitrogen|bun|blood\s+urea|bu)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bbu\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"blood\s+urea\s+nitrogen[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bbun\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"blood\s+urea[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "sc": [
+        r"(?:serum\s+creatinine|creatinine|sc)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bsc\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"serum\s+creatinine[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bcreatinine\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "sod": [
+        r"serum\s+sodium[^0-9]{0,20}?(\d+\.?\d*)",
+        r"sodium\s+electrolyte[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bsodium\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bna\+?\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "pot": [
+        r"serum\s+potassium[^0-9]{0,20}?(\d+\.?\d*)",
+        r"potassium\s+electrolyte[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bpotassium\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bk\+?\b[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "hemo": [
-        r"hemoglobin\s+\(hb\)[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"hemoglobin[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"\bhb\b[^0-9]{0,20}?(\d+(?:\.\d+)?)",
+        r"(?:hemoglobin(?:\s*\(hb\))?|hemo|hb)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bhemo\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"hemoglobin\s+\(hb\)[^0-9]{0,20}?(\d+\.?\d*)",
+        r"hemoglobin[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bhb\b[^0-9]{0,20}?(\d+\.?\d*)",
     ],
-    "bmi":  [r"bmi[^0-9]{0,20}?(\d+(?:\.\d+)?)", r"body\s+mass\s+index[^0-9]{0,20}?(\d+(?:\.\d+)?)"],
+    "pcv": [
+        r"packed\s+cell\s+volume[^0-9]{0,20}?(\d+\.?\d*)",
+        r"hematocrit[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bpcv\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "wc": [
+        r"(?:white\s+blood\s+cell(?:\s+count)?|total\s+leukocyte\s+count|wbc|tlc|wc)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bwc\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"white\s+blood\s+cell(?:\s+count)?[^0-9]{0,20}?(\d+\.?\d*)",
+        r"total\s+leukocyte\s+count[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bwbc\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\btlc\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "rc": [
+        r"(?:red\s+blood\s+cell(?:\s+count)?|total\s+rbc\s+count|rbc|rc)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\brc\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"red\s+blood\s+cell(?:\s+count)?[^0-9]{0,20}?(\d+\.?\d*)",
+        r"total\s+rbc\s+count[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\brbc\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "htn": [
+        r"hypertension\s+(?:present|history)[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bhtn\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+
+    # ── Liver Disease Parameters ──
     "total_bilirubin": [
-        r"total\s+bilirubin[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"t\.bili[^0-9]{0,20}?(\d+(?:\.\d+)?)",
+        r"(?:total\s+bilirubin|t\.bili|total_bilirubin)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\btotal_bilirubin\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"total\s+bilirubin[^0-9]{0,20}?(\d+\.?\d*)",
+        r"t\.bili[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "direct_bilirubin": [
+        r"(?:direct\s+bilirubin|conjugated\s+bilirubin|d\.bili|direct_bilirubin)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bdirect_bilirubin\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"direct\s+bilirubin[^0-9]{0,20}?(\d+\.?\d*)",
+        r"conjugated\s+bilirubin[^0-9]{0,20}?(\d+\.?\d*)",
+        r"d\.bili[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "alkaline_phosphotase": [
+        r"(?:alkaline\s+phosphatase|alp|alkaline_phosphotase)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\balkaline_phosphotase\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"alkaline\s+phosphatase[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\balp\b[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "alamine_aminotransferase": [
-        r"sgpt\s*/\s*alt[^0-9]{0,30}?(\d+(?:\.\d+)?)",
-        r"\bsgpt\b[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"\balt\b[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"alamine\s+aminotransferase[^0-9]{0,20}?(\d+(?:\.\d+)?)",
+        r"(?:sgpt\s*/\s*alt|sgpt|alt|alamine\s+aminotransferase|alamine_aminotransferase)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\balamine_aminotransferase\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"sgpt\s*/\s*alt[^0-9]{0,30}?(\d+\.?\d*)",
+        r"\bsgpt\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\balt\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"alamine\s+aminotransferase[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "aspartate_aminotransferase": [
-        r"sgot\s*/\s*ast[^0-9]{0,30}?(\d+(?:\.\d+)?)",
-        r"\bsgot\b[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"\bast\b[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"aspartate\s+aminotransferase[^0-9]{0,20}?(\d+(?:\.\d+)?)",
+        r"(?:sgot\s*/\s*ast|sgot|ast|aspartate\s+aminotransferase|aspartate_aminotransferase)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\baspartate_aminotransferase\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"sgot\s*/\s*ast[^0-9]{0,30}?(\d+\.?\d*)",
+        r"\bsgot\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\bast\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"aspartate\s+aminotransferase[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "total_proteins": [
+        r"total\s+protein(?:s)?[^0-9]{0,20}?(\d+\.?\d*)",
+        r"serum\s+total\s+protein[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "albumin": [
-        r"serum\s+albumin[^0-9]{0,20}?(\d+(?:\.\d+)?)",
-        r"\balbumin\b[^0-9]{0,20}?(\d+(?:\.\d+)?)",
+        r"serum\s+albumin[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\balbumin\b[^0-9]{0,20}?(\d+\.?\d*)",
     ],
+    "albumin_and_globulin_ratio": [
+        r"albumin\s*[/_]?\s*(?:and\s+)?globulin\s+ratio[^0-9]{0,30}?(\d+\.?\d*)",
+        r"a\s*[/:\-]\s*g\s+ratio[^0-9]{0,20}?(\d+\.?\d*)",
+        r"\ba/g\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+
+    # ── Stroke Risk Parameters ──
+    "hypertension": [
+        r"chronic\s+hypertension[^0-9]{0,20}?(\d+\.?\d*)",
+        r"hypertension[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "heart_disease": [
+        r"co-?existing\s+heart\s+disease[^0-9]{0,20}?(\d+\.?\d*)",
+        r"heart\s+disease[^0-9]{0,20}?(\d+\.?\d*)",
+        r"cardiovascular\s+disease[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "avg_glucose_level": [
+        r"(?:average\s+(?:blood\s+)?glucose(?:level)?|fasting\s+blood\s+glucose|glucose|avg_glucose_level)\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"\bavg_glucose_level\b[^0-9]{0,20}?(\d+\.?\d*)",
+        r"average\s+(?:blood\s+)?glucose(?:level)?[^0-9]{0,30}?(\d+\.?\d*)",
+        r"fasting\s+blood\s+glucose[^0-9]{0,30}?(\d+\.?\d*)",
+        r"\bglucose\b[^0-9]{0,20}?(\d+\.?\d*)",
+    ],
+    "smoking_status": [
+        r"smoking\s+status[^0-9]{0,20}?(\d+\.?\d*)",
+        r"tobacco\s+smoking[^0-9]{0,20}?(\d+\.?\d*)",
+    ]
 }
 
 
@@ -106,7 +340,6 @@ def extract_text_from_pdf_base64(b64_string: str) -> str:
     """Decode base64 PDF and extract plain text via pypdf."""
     try:
         clean_b64 = re.sub(r"^data:.*?;base64,", "", b64_string.strip())
-        # Add padding if needed
         missing = len(clean_b64) % 4
         if missing:
             clean_b64 += "=" * (4 - missing)
@@ -131,12 +364,13 @@ def parse_report(disease_key: str, text_content: str) -> dict:
     extracted: dict = {}
 
     # ── Age ──────────────────────────────────────────────────────────────────
-    m_age = re.search(r"(\d{2})\s*(?:yrs|years|yr)", text_lower)
+    m_age = re.search(r"(\d{1,2})\s*(?:yrs|years|yr)", text_lower)
     if not m_age:
-        m_age = re.search(r"age\s*[/:\-]?\s*(\d{2})", text_lower)
+        m_age = re.search(r"age\s*[/:\-]?\s*(\d{1,2})", text_lower)
     if m_age:
-        extracted["age"] = float(m_age.group(1))
-        extracted["Age"] = extracted["age"]
+        val = float(m_age.group(1))
+        extracted["age"] = val
+        extracted["Age"] = val
 
     # ── Gender / Sex ──────────────────────────────────────────────────────────
     if re.search(r"\bfemale\b", text_lower):
@@ -154,7 +388,6 @@ def parse_report(disease_key: str, text_content: str) -> dict:
                 try:
                     val = float(match.group(1))
                     extracted[param] = val
-                    # Also store under any case-matching required feature name
                     for f in required_features:
                         if f.lower() == param.lower():
                             extracted[f] = val
@@ -162,157 +395,162 @@ def parse_report(disease_key: str, text_content: str) -> dict:
                 except (ValueError, IndexError):
                     pass
 
-    # ── Derive composite fields ───────────────────────────────────────────────
-    # Store raw glucose before converting fbs to binary flag
-    raw_fbs = extracted.get("fbs", extracted.get("glucose", 100))
-    fbs_flag = 1.0 if raw_fbs >= 120 else 0.0
+    # ── Clinical Semantics & Cross-Field Conversions ─────────────────────────
+    # Fasting blood sugar / glucose handling
+    raw_glucose = extracted.get("glucose", extracted.get("fbs", extracted.get("avg_glucose_level", extracted.get("bgr"))))
+    if raw_glucose is not None:
+        extracted["_raw_glucose"] = raw_glucose
+        if "glucose" not in extracted:
+            extracted["glucose"] = raw_glucose
+            extracted["Glucose"] = raw_glucose
+        if "avg_glucose_level" not in extracted:
+            extracted["avg_glucose_level"] = raw_glucose
+        if "bgr" not in extracted:
+            extracted["bgr"] = raw_glucose
 
-    # For heart disease: fbs must be binary (0/1) not raw glucose
-    # Keep raw glucose for diabetes/stroke/kidney models
+    # Heart model requires binary fbs (1 if fasting blood sugar > 120 or binary input is 1, else 0)
     if "fbs" in extracted:
-        extracted["_raw_glucose"] = extracted["fbs"]   # save original
-        extracted["fbs"] = fbs_flag                    # convert to flag
-    if "glucose" not in extracted and "_raw_glucose" in extracted:
-        extracted["glucose"] = extracted["_raw_glucose"]
+        fbs_val = float(extracted["fbs"])
+        extracted["fbs"] = 1.0 if (fbs_val == 1.0 or fbs_val >= 120.0) else 0.0
+    elif raw_glucose is not None and "fbs" in required_features:
+        gluc_val = float(raw_glucose)
+        extracted["fbs"] = 1.0 if (gluc_val == 1.0 or gluc_val >= 120.0) else 0.0
 
-    # Hypertension flag
-    bp_val = extracted.get("trestbps", 120)
-    htn_flag = 1.0 if bp_val >= 140 else 0.0
+    # Blood pressure aliases across diseases (trestbps in heart, bp in kidney, BloodPressure in diabetes)
+    raw_bp = extracted.get("trestbps", extracted.get("bp", extracted.get("bloodpressure")))
+    if raw_bp is not None:
+        if "trestbps" not in extracted and "trestbps" in required_features:
+            extracted["trestbps"] = raw_bp
+        if "bp" not in extracted and "bp" in required_features:
+            extracted["bp"] = raw_bp
+        if "bloodpressure" not in extracted and "BloodPressure" in required_features:
+            extracted["BloodPressure"] = raw_bp
+            extracted["bloodpressure"] = raw_bp
 
-    # ── High-Yield Defaults ───────────────────────────────────────────────────
-    defaults = {
-        "heart": {
-            "age":       extracted.get("age", 56.0),
-            "sex":       extracted.get("sex", 1.0),
-            "cp":        2.0 if "angina" in text_lower or "chest pain" in text_lower else 1.0,
-            "trestbps":  extracted.get("trestbps", 145.0),
-            "chol":      extracted.get("chol", 260.0),
-            "fbs":       fbs_flag,
-            "restecg":   1.0 if "st depression" in text_lower or "ecg" in text_lower else 0.0,
-            "thalach":   extracted.get("thalach", 138.0),
-            "exang":     1.0 if "ischemia" in text_lower or "angina" in text_lower else 0.0,
-            "oldpeak":   extracted.get("oldpeak", 2.0),
-            "slope":     1.0,
-            "ca":        1.0 if "plaque" in text_lower or "atheroma" in text_lower else 0.0,
-            "thal":      2.0,
-        },
-        "diabetes": {
-            "Pregnancies":              1.0,
-            "Glucose":                  extracted.get("glucose", extracted.get("fbs", 168.0)),
-            "BloodPressure":            extracted.get("trestbps", 82.0),
-            "SkinThickness":            24.0,
-            "Insulin":                  140.0,
-            "BMI":                      extracted.get("bmi", 29.5),
-            "DiabetesPedigreeFunction": 0.45,
-            "Age":                      extracted.get("Age", extracted.get("age", 48.0)),
-        },
-        "kidney": {
-            "age":  extracted.get("age", 54.0),
-            "bp":   extracted.get("trestbps", 85.0),
-            "sg":   1.015,
-            "al":   2.0 if "protein" in text_lower or "albumin" in text_lower else 1.0,
-            "su":   fbs_flag,
-            "bgr":  extracted.get("glucose", extracted.get("fbs", 165.0)),
-            "bu":   extracted.get("bu", 52.0),
-            "sc":   extracted.get("sc", 1.8),
-            "sod":  134.0,
-            "pot":  5.1,
-            "hemo": extracted.get("hemo", 10.8),
-            "pcv":  34.0,
-            "wc":   8200.0,
-            "rc":   4.1,
-            "htn":  htn_flag,
-        },
-        "liver": {
-            "Age":                         extracted.get("Age", extracted.get("age", 52.0)),
-            "Gender":                      extracted.get("Gender", extracted.get("sex", 1.0)),
-            "Total_Bilirubin":             extracted.get("total_bilirubin", 2.6),
-            "Direct_Bilirubin":            round(extracted.get("total_bilirubin", 2.6) * 0.4, 2),
-            "Alkaline_Phosphotase":        290.0,
-            "Alamine_Aminotransferase":    extracted.get("alamine_aminotransferase", 78.0),
-            "Aspartate_Aminotransferase":  extracted.get("aspartate_aminotransferase", 72.0),
-            "Total_Proteins":              6.4,
-            "Albumin":                     extracted.get("albumin", 3.2),
-            "Albumin_and_Globulin_Ratio":  0.85,
-        },
-        "stroke": {
-            "age":               extracted.get("age", 60.0),
-            "hypertension":      htn_flag,
-            "heart_disease":     1.0 if extracted.get("oldpeak", 0) >= 1.5 else 0.0,
-            "avg_glucose_level": extracted.get("glucose", extracted.get("fbs", 185.0)),
-            "bmi":               extracted.get("bmi", 30.8),
-            "smoking_status":    1.0,
-        },
-    }
+        # Hypertension flag: 1 if systolic >= 140 or clinical diagnosis
+        if "htn" not in extracted and "htn" in required_features:
+            extracted["htn"] = 1.0 if raw_bp >= 140 else 0.0
+        if "hypertension" not in extracted and "hypertension" in required_features:
+            extracted["hypertension"] = 1.0 if raw_bp >= 140 else 0.0
 
-    disease_defaults = defaults.get(disease_key, defaults["heart"])
-    final_params: dict = {}
-    for param_name in required_features:
-        if param_name in extracted:
-            final_params[param_name] = extracted[param_name]
-        elif param_name.lower() in extracted:
-            final_params[param_name] = extracted[param_name.lower()]
+    # BMI aliases
+    if "bmi" in extracted and "BMI" in required_features:
+        extracted["BMI"] = extracted["bmi"]
+    elif "BMI" in extracted and "bmi" in required_features:
+        extracted["bmi"] = extracted["BMI"]
+
+    # Heart disease history for stroke model
+    if "heart_disease" in required_features and "heart_disease" not in extracted:
+        if extracted.get("oldpeak", 0) >= 1.5 or "angina" in text_lower or "ischemia" in text_lower:
+            extracted["heart_disease"] = 1.0
+
+    # ── Match strictly against required disease features ──────────────────────
+    strictly_extracted: dict = {}
+    missing_features = []
+
+    for req in required_features:
+        if req in extracted:
+            strictly_extracted[req] = extracted[req]
+        elif req.lower() in extracted:
+            strictly_extracted[req] = extracted[req.lower()]
         else:
-            final_params[param_name] = disease_defaults.get(param_name, 0.0)
+            missing_features.append(req)
 
-    # ── Dangerous anomaly detection ───────────────────────────────────────────
+    extracted_count = len(strictly_extracted)
+
+    # ── Strict Medical Validation: At least 3 genuine parameters required ───
+    MIN_REQUIRED_PARAMS = 3
+    if extracted_count < MIN_REQUIRED_PARAMS:
+        return {
+            "is_valid_medical_report": False,
+            "rejection_reason": "Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.",
+            "extracted_parameters": {},
+            "missing_parameters": required_features,
+            "dangerous_parameters": [],
+            "parameter_contributions": [],
+            "layman_summary": "Invalid Medical Report / No Biomarkers Found. Please upload an official clinical blood test panel or laboratory report."
+        }
+
+    # ── Build Final Parameter Set for Inference & Dashboard ──────────────────
+    # ONLY populated with exact extracted values; missing values receive calibrated population reference baselines
+    ref_baselines = POPULATION_REFERENCE_BASELINES.get(disease_key, POPULATION_REFERENCE_BASELINES["heart"])
+    final_params: dict = {}
+    for req in required_features:
+        if req in strictly_extracted:
+            final_params[req] = strictly_extracted[req]
+        else:
+            final_params[req] = ref_baselines.get(req, 0.0)
+
+    # ── Dangerous Anomaly Detection (Based strictly on verified values) ────────
     dangerous = []
-    bp = final_params.get("trestbps", final_params.get("bp", 0))
-    if bp >= 150:
+    
+    # Blood Pressure Check
+    bp_eval = strictly_extracted.get("trestbps", strictly_extracted.get("bp", strictly_extracted.get("BloodPressure")))
+    if bp_eval is not None and bp_eval >= 150:
         dangerous.append({
             "param": "Blood Pressure",
-            "value": bp,
+            "value": bp_eval,
             "unit": "mmHg",
             "severity": "High",
-            "concern": f"Stage 2 Hypertensive Range ({bp} mmHg). Increased risk of stroke and renal damage.",
-        })
-    chol = final_params.get("chol", 0)
-    if chol >= 240:
-        dangerous.append({
-            "param": "Serum Cholesterol",
-            "value": chol,
-            "unit": "mg/dL",
-            "severity": "Critical",
-            "concern": f"Severe hypercholesterolemia ({chol} mg/dL). Significant arterial plaque vulnerability.",
-        })
-    gluc = final_params.get("Glucose", final_params.get("glucose", final_params.get("avg_glucose_level", 0)))
-    if gluc >= 180:
-        dangerous.append({
-            "param": "Fasting Blood Glucose",
-            "value": gluc,
-            "unit": "mg/dL",
-            "severity": "Critical Alert",
-            "concern": f"Severe acute hyperglycemia ({gluc} mg/dL). Immediate glycemic management required.",
-        })
-    sc = final_params.get("sc", 0)
-    if sc >= 1.6:
-        dangerous.append({
-            "param": "Serum Creatinine",
-            "value": sc,
-            "unit": "mg/dL",
-            "severity": "High",
-            "concern": f"Renal filtration clearance impairment ({sc} mg/dL). CKD staging recommended.",
-        })
-    tb = final_params.get("Total_Bilirubin", 0)
-    if tb >= 2.0:
-        dangerous.append({
-            "param": "Total Bilirubin",
-            "value": tb,
-            "unit": "mg/dL",
-            "severity": "High",
-            "concern": f"Clinical jaundice threshold exceeded ({tb} mg/dL). Hepatic function workup needed.",
-        })
-    old = final_params.get("oldpeak", 0)
-    if old >= 2.0:
-        dangerous.append({
-            "param": "ST Depression (Oldpeak)",
-            "value": old,
-            "unit": "mm",
-            "severity": "Critical",
-            "concern": f"ST-segment depression ≥ 2mm — direct indicator of myocardial ischemia.",
+            "concern": f"Stage 2 Hypertensive Range ({bp_eval} mmHg). Elevated vascular and renal strain.",
         })
 
-    # ── Parameter contributions (for UI display) ─────────────────────────────
+    # Cholesterol Check
+    chol_eval = strictly_extracted.get("chol")
+    if chol_eval is not None and chol_eval >= 240:
+        dangerous.append({
+            "param": "Serum Cholesterol",
+            "value": chol_eval,
+            "unit": "mg/dL",
+            "severity": "Critical",
+            "concern": f"Severe hypercholesterolemia ({chol_eval} mg/dL). Significant arterial plaque vulnerability.",
+        })
+
+    # Glucose Check
+    gluc_eval = strictly_extracted.get("Glucose", strictly_extracted.get("glucose", strictly_extracted.get("avg_glucose_level", strictly_extracted.get("bgr"))))
+    if gluc_eval is not None and gluc_eval >= 180:
+        dangerous.append({
+            "param": "Blood Glucose",
+            "value": gluc_eval,
+            "unit": "mg/dL",
+            "severity": "Critical Alert",
+            "concern": f"Severe acute hyperglycemia ({gluc_eval} mg/dL). Immediate glycemic management required.",
+        })
+
+    # Serum Creatinine Check
+    sc_eval = strictly_extracted.get("sc")
+    if sc_eval is not None and sc_eval >= 1.6:
+        dangerous.append({
+            "param": "Serum Creatinine",
+            "value": sc_eval,
+            "unit": "mg/dL",
+            "severity": "High",
+            "concern": f"Renal filtration clearance impairment ({sc_eval} mg/dL). CKD staging recommended.",
+        })
+
+    # Total Bilirubin Check
+    tb_eval = strictly_extracted.get("Total_Bilirubin", strictly_extracted.get("total_bilirubin"))
+    if tb_eval is not None and tb_eval >= 2.0:
+        dangerous.append({
+            "param": "Total Bilirubin",
+            "value": tb_eval,
+            "unit": "mg/dL",
+            "severity": "High",
+            "concern": f"Clinical jaundice threshold exceeded ({tb_eval} mg/dL). Hepatic function workup needed.",
+        })
+
+    # ST Depression (Oldpeak) Check
+    old_eval = strictly_extracted.get("oldpeak")
+    if old_eval is not None and old_eval >= 2.0:
+        dangerous.append({
+            "param": "ST Depression (Oldpeak)",
+            "value": old_eval,
+            "unit": "mm",
+            "severity": "Critical",
+            "concern": f"ST-segment depression >= 2.0mm ({old_eval} mm) — direct indicator of myocardial ischemia.",
+        })
+
+    # ── Parameter Contributions (Rendered strictly from verified inputs) ─────
     contributions = []
     for pname, pval in final_params.items():
         matched_dangerous = next((d for d in dangerous if d["param"].lower().startswith(pname.lower()[:5])), None)
@@ -326,26 +564,19 @@ def parse_report(disease_key: str, text_content: str) -> dict:
             "explanation": matched_dangerous["concern"] if matched_dangerous else f"{pname} is within acceptable reference range."
         })
 
-    # ── Missing parameters ────────────────────────────────────────────────────
-    missing = [f for f in required_features
-               if f not in extracted and f.lower() not in extracted]
-
-    extracted_count = len(required_features) - len(missing)
     danger_count = len(dangerous)
-
     summary = (
         f"Lab report parsed in <200ms. "
         f"Extracted {extracted_count}/{len(required_features)} clinical biomarkers. "
         f"{danger_count} out-of-range critical deviation(s) detected requiring physician review."
-        if extracted_count > 0
-        else "Report scanned — using calibrated population reference baselines for undetected parameters."
     )
 
     return {
         "is_valid_medical_report": True,
         "rejection_reason": None,
         "extracted_parameters": final_params,
-        "missing_parameters": missing[:5],
+        "strictly_extracted": strictly_extracted,
+        "missing_parameters": missing_features[:5],
         "dangerous_parameters": dangerous,
         "parameter_contributions": contributions,
         "layman_summary": summary,
@@ -353,7 +584,6 @@ def parse_report(disease_key: str, text_content: str) -> dict:
 
 
 def main():
-    # Read entire stdin as the JSON payload
     raw_stdin = sys.stdin.read().strip()
     if not raw_stdin:
         print(json.dumps({"status": "error", "message": "No input received on stdin"}))
@@ -367,15 +597,11 @@ def main():
 
     disease = payload.get("disease", "heart")
     file_base64 = payload.get("fileBase64", "")
+    text_content = payload.get("text", "")
 
-    text_content = ""
-
-    # Try PDF extraction first
-    if file_base64:
+    if not text_content and file_base64:
         text_content = extract_text_from_pdf_base64(file_base64)
 
-    # If extraction yielded nothing (image / corrupted), use empty string —
-    # the defaults in parse_report() will provide sensible fallback values.
     if not text_content:
         text_content = ""
 

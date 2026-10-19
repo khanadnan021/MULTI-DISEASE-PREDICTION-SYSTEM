@@ -64,12 +64,15 @@ export const MedicalReportUpload: React.FC<MedicalReportUploadProps> = ({
         const json = await res.json();
         if (json.status === 'success') {
           const data: ExtractedReportData = json.data;
-          setExtractionResult(data);
           if (!data.is_valid_medical_report) {
-            setErrorMsg(data.rejection_reason || 'Yeh uploaded file koi valid Medical Lab Report nahi lag rahi hai. Kripya genuine Blood Test ya Lab Report upload karein.');
+            setExtractionResult(null);
+            setErrorMsg(data.rejection_reason || 'Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.');
+          } else {
+            setExtractionResult(data);
           }
         } else {
-          setErrorMsg(json.message || 'Report analyze karne me samasya aayi.');
+          setExtractionResult(null);
+          setErrorMsg(json.message || 'Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.');
         }
         setAnalyzing(false);
       };

@@ -13,8 +13,16 @@ export const DecisionTreeVisualizer: React.FC<DecisionTreeVisualizerProps> = ({
   features = {},
   isPositive
 }) => {
-  const feat: Record<string, number> = features as Record<string, number>;
-  const getVal = (k: string, defVal = 0): number => (feat && feat[k] !== undefined ? feat[k] : defVal);
+  const feat: Record<string, any> = features;
+  const getVal = (k: string, defVal = 0): number => {
+    if (!feat) return defVal;
+    const v = feat[k] !== undefined ? feat[k] : feat[k.toLowerCase()];
+    if (v !== undefined && v !== null && v !== '') {
+      const num = Number(v);
+      return !isNaN(num) ? num : defVal;
+    }
+    return defVal;
+  };
 
   const getTreeRules = () => {
     switch (disease) {

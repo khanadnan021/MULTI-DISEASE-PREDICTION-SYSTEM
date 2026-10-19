@@ -26,8 +26,16 @@ export const BiomarkerVisualizer: React.FC<BiomarkerVisualizerProps> = ({ diseas
     return null;
   }
 
-  const feat: Record<string, number> = features;
-  const getVal = (k: string, defVal = 0): number => (feat[k] !== undefined ? feat[k] : defVal);
+  const feat: Record<string, any> = features;
+  const getVal = (k: string, defVal = 0): number => {
+    if (!feat) return defVal;
+    const v = feat[k] !== undefined ? feat[k] : feat[k.toLowerCase()];
+    if (v !== undefined && v !== null && v !== '') {
+      const num = Number(v);
+      return !isNaN(num) ? num : defVal;
+    }
+    return defVal;
+  };
 
   const getMetrics = (): BiomarkerMetric[] => {
     switch (disease) {

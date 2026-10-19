@@ -97,54 +97,66 @@ export const PDFReportIntake: React.FC<PDFReportIntakeProps> = ({
       reader.onload = async () => {
         const base64Data = reader.result as string;
 
-        // Step 1: Extract Biomarkers via Vision OCR & validate report validity
-        const extractRes = await fetch('/api/ai/extract-report', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileBase64: base64Data,
-            mimeType: file.type || 'application/pdf',
-            targetDisease: activeDisease
-          })
-        });
+        try {
+          // Step 1: Extract Biomarkers via Vision OCR & validate report validity
+          const extractRes = await fetch('/api/ai/extract-report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileBase64: base64Data,
+              mimeType: file.type || 'application/pdf',
+              targetDisease: activeDisease
+            })
+          });
 
-        const extractJson = await extractRes.json();
-        if (extractJson.status !== 'success') {
-          throw new Error(extractJson.message || 'Failed to parse laboratory document.');
-        }
+          const extractJson = await extractRes.json();
+          if (extractJson.status !== 'success') {
+            setExtractionResult(null);
+            setErrorMsg(extractJson.message || 'Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.');
+            setAnalyzing(false);
+            return;
+          }
 
-        const data: ExtractedReportData = extractJson.data;
-        setExtractionResult(data);
+          const data: ExtractedReportData = extractJson.data;
 
-        // Strict rejection for non-medical documents
-        if (!data.is_valid_medical_report) {
-          setErrorMsg(
-            data.rejection_reason || 
-            'The uploaded document could not be verified as a recognized clinical laboratory report. Please upload a genuine blood test or diagnostic PDF panel.'
-          );
+          // Strict rejection for non-medical documents or insufficient parameters (< 3)
+          if (!data.is_valid_medical_report) {
+            setExtractionResult(null);
+            setErrorMsg(data.rejection_reason || 'Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.');
+            setAnalyzing(false);
+            return;
+          }
+
+          setExtractionResult(data);
+
+          if (onBiomarkersExtracted) {
+            onBiomarkersExtracted(data.extracted_parameters);
+          }
+
+          // Step 2: Directly execute the ML Prediction pipeline using extracted biomarkers
+          const predictRes = await fetch(`/api/predict/${activeDisease}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data.extracted_parameters)
+          });
+
+          if (!predictRes.ok) {
+            const errData = await predictRes.json();
+            throw new Error(errData.message || 'Prediction execution error.');
+          }
+
+          const prediction: PredictionResult = await predictRes.json();
+          setIsSuccess(true);
+          onPredictionComplete(prediction);
           setAnalyzing(false);
-          return;
+        } catch (innerErr: any) {
+          setExtractionResult(null);
+          setErrorMsg(innerErr.message || 'Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.');
+          setAnalyzing(false);
         }
-
-        if (onBiomarkersExtracted) {
-          onBiomarkersExtracted(data.extracted_parameters);
-        }
-
-        // Step 2: Directly execute the ML Prediction pipeline using extracted biomarkers
-        const predictRes = await fetch(`/api/predict/${activeDisease}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data.extracted_parameters)
-        });
-
-        if (!predictRes.ok) {
-          const errData = await predictRes.json();
-          throw new Error(errData.message || 'Prediction execution error.');
-        }
-
-        const prediction: PredictionResult = await predictRes.json();
-        setIsSuccess(true);
-        onPredictionComplete(prediction);
+      };
+      reader.onerror = () => {
+        setErrorMsg('Failed to read the file.');
         setAnalyzing(false);
       };
     } catch (err: any) {

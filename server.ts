@@ -5,6 +5,7 @@ import { spawn } from "child_process";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
+import { createWorker } from "tesseract.js";
 
 dotenv.config();
 
@@ -188,52 +189,119 @@ async function startServer() {
         }
       }
 
-      // ── GEMINI PATH: Images only, 10s timeout ──────────────────────────────
-      if (aiClient && !isPDF) {
-        try {
-          const prompt = `You are a Board-Certified Clinical AI Diagnostic Assistant.
-Analyze this uploaded medical document. Disease: ${disease}. Params: ${JSON.stringify(requiredList)}.
-Respond ONLY with JSON: { "is_valid_medical_report": true, "rejection_reason": null, "extracted_parameters": {}, "missing_parameters": [], "dangerous_parameters": [], "parameter_contributions": [], "layman_summary": "" }`;
-          const cleanBase64 = fileBase64.replace(/^data:.*?;base64,/, "");
-          const geminiPromise = aiClient.models.generateContent({
-            model: "gemini-1.5-flash",
-            contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: cleanBase64 } }] }]
-          });
-          const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Gemini timeout")), 10000));
-          const response = await Promise.race([geminiPromise, timeoutPromise]) as any;
-          const jsonMatch = (response.text || "{}").match(/\{[\s\S]*\}/);
-          if (jsonMatch) return res.json({ status: "success", data: JSON.parse(jsonMatch[0]) });
-        } catch (geminiErr: any) {
-          console.warn("⚡ Gemini failed, using instant fallback:", geminiErr.message);
+      // ── IMAGE PATH: OCR via Tesseract.js fallback when Gemini is unavailable or fails ──
+      if (!isPDF) {
+        let extractedFromGemini = false;
+
+        // Try Gemini if client is initialized
+        if (aiClient) {
+          try {
+            const prompt = `You are a Board-Certified Clinical AI Diagnostic Assistant.
+Analyze this uploaded image for ${disease.toUpperCase()} disease diagnostic assessment. Required parameters to look for: ${JSON.stringify(requiredList)}.
+
+STRICT VERIFICATION RULES:
+1. First, examine whether this image is genuinely a CLINICAL MEDICAL LAB REPORT, BLOOD TEST DOCUMENT, or DIAGNOSTIC BIOCHEMICAL PANEL.
+2. If this image is an irrelevant photo (such as a selfie, landscape, car, pet, meme, receipt, person, scenery, object, prescription slip with no lab numbers, or any non-medical/irrelevant image), or if it does NOT contain clinical test values, you MUST REJECT IT immediately.
+3. Count the number of valid disease-relevant numerical biomarkers found in the image. You MUST find at least 3 valid parameters. If fewer than 3 parameters are clearly readable, mark "is_valid_medical_report": false.
+4. Extract exact decimal/float numbers (e.g. 2.4, 1.85, 0.85). Do not truncate or strip decimals.
+
+Respond ONLY with valid JSON in this exact schema:
+{
+  "is_valid_medical_report": false,
+  "rejection_reason": "Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.",
+  "extracted_parameters": {},
+  "missing_parameters": ${JSON.stringify(requiredList)},
+  "dangerous_parameters": [],
+  "parameter_contributions": [],
+  "layman_summary": "Invalid Medical Report / No Biomarkers Found. Please upload a clear and genuine laboratory test report."
+}
+If valid with >= 3 parameters, set "is_valid_medical_report": true, "rejection_reason": null, populate "extracted_parameters" with the exact numeric values found, and fill missing/dangerous parameters appropriately.`;
+            const cleanBase64 = fileBase64.replace(/^data:.*?;base64,/, "");
+            const geminiPromise = aiClient.models.generateContent({
+              model: "gemini-1.5-flash",
+              contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: cleanBase64 } }] }]
+            });
+            const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Gemini timeout")), 12000));
+            const response = await Promise.race([geminiPromise, timeoutPromise]) as any;
+            const jsonMatch = (response.text || "{}").match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              const paramCount = Object.keys(parsed.extracted_parameters || {}).length;
+              if (!parsed.is_valid_medical_report || paramCount < 3) {
+                return res.json({
+                  status: "success",
+                  data: {
+                    is_valid_medical_report: false,
+                    rejection_reason: "Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.",
+                    extracted_parameters: {},
+                    missing_parameters: requiredList,
+                    dangerous_parameters: [],
+                    parameter_contributions: [],
+                    layman_summary: "Invalid Medical Report / No Biomarkers Found. Please upload a clear and genuine laboratory test report."
+                  }
+                });
+              }
+              return res.json({ status: "success", data: parsed });
+            }
+          } catch (geminiErr: any) {
+            console.warn("⚡ Gemini image analysis failed, falling back to OCR engine:", geminiErr.message);
+          }
         }
+
+        // Fast & robust local OCR fallback for images (handles any image format)
+        try {
+          const cleanB64 = fileBase64.replace(/^data:.*?;base64,/, "");
+          const imgBuffer = Buffer.from(cleanB64, "base64");
+          const worker = await createWorker("eng");
+          const ret = await worker.recognize(imgBuffer);
+          await worker.terminate();
+          const recognizedText = ret?.data?.text || "";
+
+          // Pass recognized text to fast_report_parser
+          const parserScript = path.join(ML_DIR, "fast_report_parser.py");
+          const parserResult = await new Promise<any>((resolve, reject) => {
+            const proc = spawn("python3", [parserScript]);
+            let out = "";
+            let err = "";
+            const killTimer = setTimeout(() => { proc.kill(); reject(new Error("parser timeout")); }, 8000);
+            proc.stdout.on("data", (d) => { out += d.toString(); });
+            proc.stderr.on("data", (d) => { err += d.toString(); });
+            proc.on("close", (code) => {
+              clearTimeout(killTimer);
+              if (code !== 0) return reject(new Error(err || `exit ${code}`));
+              try { resolve(JSON.parse(out.trim())); } catch { reject(new Error("parse error")); }
+            });
+            proc.on("error", reject);
+            proc.stdin.write(JSON.stringify({ disease, text: recognizedText }));
+            proc.stdin.end();
+          });
+
+          if (parserResult?.status === "success") {
+            return res.json(parserResult);
+          }
+        } catch (ocrErr: any) {
+          console.warn("⚡ Local OCR parser error:", ocrErr.message);
+        }
+
+        // If OCR also failed or image is unreadable / irrelevant
+        return res.json({
+          status: "success",
+          data: {
+            is_valid_medical_report: false,
+            rejection_reason: "Invalid Medical Report / No Biomarkers Found. Uploaded document does not contain verifiable clinical diagnostic parameters.",
+            extracted_parameters: {},
+            missing_parameters: requiredList,
+            dangerous_parameters: [],
+            parameter_contributions: [],
+            layman_summary: "Invalid Medical Report / No Biomarkers Found. Please upload a clear and genuine laboratory test report."
+          }
+        });
       }
 
-      // ── INSTANT FALLBACK ─────────────────────────────────────────────────────
-      const simulatedExtractions: Record<string, any> = {
-        heart: { age: 56, sex: 1, cp: 2, trestbps: 148, chol: 265, fbs: 1, restecg: 1, thalach: 135, exang: 1, oldpeak: 2.2, slope: 1, ca: 1, thal: 2 },
-        diabetes: { Pregnancies: 2, Glucose: 168, BloodPressure: 84, SkinThickness: 28, Insulin: 155, BMI: 31.4, DiabetesPedigreeFunction: 0.58, Age: 48 },
-        kidney: { age: 58, bp: 90, sg: 1.015, al: 2, su: 1, bgr: 160, bu: 62, sc: 1.8, sod: 132, pot: 5.2, hemo: 10.4, pcv: 32, wc: 8400, rc: 3.8, htn: 1 },
-        liver: { Age: 52, Gender: 1, Total_Bilirubin: 2.8, Direct_Bilirubin: 1.2, Alkaline_Phosphotase: 310, Alamine_Aminotransferase: 75, Aspartate_Aminotransferase: 68, Total_Proteins: 6.2, Albumin: 3.1, Albumin_and_Globulin_Ratio: 0.75 },
-        stroke: { age: 64, hypertension: 1, heart_disease: 0, avg_glucose_level: 185.0, bmi: 31.2, smoking_status: 1 }
-      };
-      const extracted = simulatedExtractions[disease] || simulatedExtractions.heart;
-      return res.json({
-        status: "success",
-        data: {
-          is_valid_medical_report: true,
-          rejection_reason: null,
-          extracted_parameters: extracted,
-          missing_parameters: ["thalach", "ca"],
-          dangerous_parameters: [
-            { param: "trestbps", value: 148, unit: "mmHg", severity: "High", concern: "Resting BP elevated (Stage 2 Hypertension)." },
-            { param: "chol", value: 265, unit: "mg/dL", severity: "Critical", concern: "Severe hypercholesterolemia above 240 mg/dL." }
-          ],
-          parameter_contributions: [
-            { param: "chol", value: 265, status: "Critical", direction: "Increases Risk", explanation: "Cholesterol 265 mg/dL - arterial lipid plaque risk." },
-            { param: "oldpeak", value: 2.2, status: "Critical", direction: "Increases Risk", explanation: "ST-depression > 1.5mm - myocardial ischemia indicator." }
-          ],
-          layman_summary: "Report me cholesterol aur blood pressure high hain. Instant fallback results diye gaye hain."
-        }
+      // Default fallback
+      return res.status(400).json({
+        status: "error",
+        message: "Invalid Medical Report / No Biomarkers Found. Please upload a clear and genuine laboratory test report."
       });
     } catch (err: any) {
       console.error("Report extraction error:", err);
@@ -254,22 +322,22 @@ Respond ONLY with JSON: { "is_valid_medical_report": true, "rejection_reason": n
       if (aiClient) {
         const prompt = `
 You are an expert Electrocardiography (ECG) and Clinical Cardiac Electrophysiology Specialist.
-Analyze the attached 12-lead or single-lead ECG waveform/smartwatch strip.
+Analyze the attached image.
 Patient context: Age ${patientAge || 50}, Gender ${patientGender === 1 ? "Male" : "Female"}.
 
-PERFORM ADVANCED ANALYSIS:
-1. Rhythm & Heart Rate: Normal Sinus Rhythm, Atrial Fibrillation, Bradycardia, Tachycardia, Sinus Arrhythmia.
-2. Waveform & Intervals:
-   - PR Interval, QRS Complex duration, QT/QTc interval.
-   - ST-Segment: Any ST Elevation (STEMI marker), ST Depression (ischemia marker), or normal isoelectric line.
-   - T-Wave: Upright, flat, or inverted (ischemia/infarction/electrolyte disturbance).
-3. Micro-voltage deviations: Check for microvolt T-wave alternans or baseline wander.
-4. Clinical Risk Stratification: Low, Moderate, High, or Urgent.
-5. Layman explanation in Hinglish: Explain clearly what is happening in their heart rhythm without medical jargon panic.
-6. Doctor's briefing note: Exact points the patient should show their cardiologist.
+STRICT VALIDATION:
+1. First, check if the attached image is truly an Electrocardiogram (ECG / EKG) waveform, Holter monitor strip, or smartwatch cardiac rhythm trace.
+2. If this image is NOT an ECG (e.g. selfie, car, landscape, random screenshot, pet, irrelevant object, food, or general photo), YOU MUST REJECT IT.
 
-Respond strictly in JSON format:
+If INVALID or IRRELEVANT, respond ONLY with:
 {
+  "is_valid_ecg": false,
+  "rejection_reason": "Uploaded image is not a recognized ECG waveform or cardiac monitoring strip. Please upload a clear ECG trace."
+}
+
+If VALID ECG, perform analysis and respond strictly in JSON format:
+{
+  "is_valid_ecg": true,
   "rhythm": "Sinus Rhythm with Occasional PVCs",
   "heart_rate_bpm": 78,
   "st_segment_status": "Mild ST Depression in leads V4-V6 (-1.2mm)",
@@ -309,30 +377,20 @@ Respond strictly in JSON format:
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.is_valid_ecg === false) {
+            return res.status(400).json({
+              status: "error",
+              message: "Irrelevant image uploaded. The provided image is not recognized as a valid ECG waveform or cardiac monitoring strip."
+            });
+          }
           return res.json({ status: "success", data: parsed });
         }
       }
 
-      // Simulated Clinical ECG Analysis Fallback
-      return res.json({
-        status: "success",
-        data: {
-          rhythm: "Sinus Rhythm with Occasional Premature Ventricular Contractions (PVCs)",
-          heart_rate_bpm: 82,
-          st_segment_status: "Horizontal ST-Segment depression (-1.4 mm in V4-V6)",
-          t_wave_morphology: "Asymmetrical T-wave inversion in Lead II and aVF",
-          qtc_interval_ms: 432,
-          is_arrhythmia_detected: true,
-          risk_severity: "High",
-          urgent_alert: false,
-          sub_visual_findings: "Microvolt ST instability and altered repolarization vector detected. Indicates sub-endocardial ischemia under hemodynamic stress.",
-          layman_explanation: "Aapke ECG waveform me dil ki dhadkan ki rhythm me halka sa jhatka (irregular beats) aur ST-line par thoda dabav dikha hai. Iska matlab hai dil ke pathon tak blood supply thodi kam ho sakti hai. Ghhabrane ki baat nahi hai, par cardiologist ko yeh ECG zaroor dikhayein.",
-          doctor_handover_notes: [
-            "ST depression of 1.4mm recorded in anterolateral leads V4-V6",
-            "Frequent monomorphic PVCs noticed during basal rhythm",
-            "Recommended: 2D Echocardiography to evaluate LVEF and myocardial wall motion"
-          ]
-        }
+      // If AI client failed or not available, do not return fake analysis for unverified images
+      return res.status(400).json({
+        status: "error",
+        message: "Irrelevant image uploaded. Please provide a clear and authentic ECG rhythm trace."
       });
     } catch (err: any) {
       console.error("ECG analysis error:", err);
@@ -356,23 +414,21 @@ Respond strictly in JSON format:
       if (aiClient) {
         const prompt = `
 You are an expert Diagnostic Radiologist & Clinical Imaging AI.
-Analyze this CT Scan cross-section or 3D slice.
-Scan Region: ${region}.
-NOTE: In hospitals, official written radiology reports take 24 to 48 hours to arrive. Your mission is to provide an INSTANT PRELIMINARY RADIOLOGICAL ASSESSMENT so patient and attending clinician have critical visibility right now.
+Analyze this image. Scan Region specified: ${region}.
 
-TASKS:
-1. Identify Anatomical Structures visible (e.g. Liver parenchyma, kidneys, lungs, ventricles, bone density, vascular calcification).
-2. Spot any Acute Abnormalities / Red Flags:
-   - Hepatic steatosis / focal lesions / hepatomegaly
-   - Renal cysts, calculus (stones), hydronephrosis
-   - Aortic calcification, cardiomegaly
-   - Brain midline shift, hyperdense hemorrhage, ischemic hypodensity
-3. Classify overall severity: Normal, Mild Finding, Significant Abnormality, Critical Emergency.
-4. Provide a clear Layman Explanation in Hinglish (jo patient bina dare samajh sake).
-5. Generate an Instant "Preliminary Provisional CT Scan Report" (matching formal radiology structure: Technique, Findings, Impression).
+STRICT VALIDATION:
+1. First, check if the attached image is truly a medical CT Scan slice, cross-sectional radiological acquisition, or MRI/X-ray cross-section.
+2. If this image is NOT a medical radiology scan (e.g. selfie, car, landscape, animal, wallpaper, non-medical photo), YOU MUST REJECT IT immediately.
 
-Respond strictly in JSON format:
+If INVALID or IRRELEVANT, respond ONLY with:
 {
+  "is_valid_ct_scan": false,
+  "rejection_reason": "Irrelevant image uploaded. The provided image is not recognized as a valid CT scan slice or radiological cross-section."
+}
+
+If VALID CT SCAN, perform analysis and respond strictly in JSON format:
+{
+  "is_valid_ct_scan": true,
   "scan_type": "${scanType || 'Non-Contrast Computed Tomography (NCCT)'}",
   "anatomical_region": "${region}",
   "severity": "Significant Abnormality",
@@ -413,30 +469,20 @@ Respond strictly in JSON format:
         const jsonMatch = rawText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed.is_valid_ct_scan === false) {
+            return res.status(400).json({
+              status: "error",
+              message: "Irrelevant image uploaded. The provided image is not recognized as a valid CT scan slice or radiological cross-section."
+            });
+          }
           return res.json({ status: "success", data: parsed });
         }
       }
 
-      // Simulated Radiology Accelerator Fallback
-      return res.json({
-        status: "success",
-        data: {
-          scan_type: scanType || "High-Resolution Computed Tomography (HRCT / NCCT)",
-          anatomical_region: region,
-          severity: "Significant Abnormality",
-          key_findings: [
-            "Liver parenchyma shows diffuse low attenuation (~38 HU), diagnostic of Moderate Hepatic Steatosis (Grade II Fatty Liver).",
-            "Bilateral renal cortical thickness preserved; a 4mm non-obstructing cortical cyst noted in right lower pole.",
-            "Mild atheromatous calcification along the abdominal aorta bifurcation."
-          ],
-          urgent_flag: false,
-          layman_summary: "Aapke CT scan me liver par charbi (fatty liver) jama dikh rahi hai aur right kidney me ek chota sa pani ka harmless cyst hai. Hospital ki official written report aane me 24 ghante lagenge, par preliminary scan se koi emergency bleeding ya tumor nahi hai.",
-          provisional_report: {
-            "technique": "Axial 5mm helical CT acquisition without intravenous contrast.",
-            "findings": "The liver is mildly enlarged with diffuse parenchymal attenuation lower than that of the spleen, compatible with hepatic fat infiltration. No acute focal lesions or intrahepatic biliary dilatation. Both kidneys demonstrate normal size and symmetric parenchyma. Minimal vascular calcification identified.",
-            "impression": "1. Diffuse Grade II Hepatic Steatosis.\\n2. Incidental benign simple right renal cortical cyst.\\n3. No acute intra-abdominal pathology or emergency finding."
-          }
-        }
+      // If AI client failed or not available, do not return fake analysis for unverified images
+      return res.status(400).json({
+        status: "error",
+        message: "Irrelevant image uploaded. Please provide a genuine radiological CT scan image."
       });
     } catch (err: any) {
       console.error("CT Scan analysis error:", err);
