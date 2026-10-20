@@ -101,15 +101,15 @@ export const BiomarkerVisualizer: React.FC<BiomarkerVisualizerProps> = ({ diseas
           },
           {
             key: 'fbs',
-            name: 'Fasting Blood Sugar > 120',
+            name: 'Fasting Blood Sugar >120',
             value: fbs,
-            unit: fbs === 1 ? 'High (>120)' : 'Normal (<=120)',
+            unit: Number(fbs) === 1 ? 'High (>120 mg/dL)' : 'Normal (≤120 mg/dL)',
             min: 0,
             max: 1,
             normalRange: [0, 0],
-            status: fbs === 1 ? 'borderline' : 'normal',
-            statusLabel: fbs === 1 ? 'Elevated' : 'Normal',
-            clinicalNote: fbs === 1 ? 'Impaired fasting glucose contributes to microvascular risk' : 'Normal glycemic metabolism'
+            status: Number(fbs) === 1 ? 'borderline' : 'normal',
+            statusLabel: Number(fbs) === 1 ? 'Elevated (>120 mg/dL)' : 'Normal (≤120 mg/dL)',
+            clinicalNote: Number(fbs) === 1 ? 'Impaired fasting glucose contributes to microvascular risk' : 'Normal glycemic metabolism'
           }
         ];
       }

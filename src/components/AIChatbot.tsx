@@ -70,6 +70,11 @@ export function AIChatbot({ onSuggestDisease }: AIChatbotProps) {
   const [hasUnread, setHasUnread] = useState(false);
   const [pulseActive, setPulseActive] = useState(true);
 
+  // Ref-based guard — prevents double-send even with stale closures
+  const isProcessingRef = useRef(false);
+  // Always-fresh messages ref — avoids stale closure in sendMessage
+  const messagesRef = useRef<ChatMessage[]>([WELCOME_MESSAGE]);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -96,9 +101,18 @@ export function AIChatbot({ onSuggestDisease }: AIChatbotProps) {
     }
   }, [isOpen]);
 
+  // Keep messagesRef always in sync with latest state
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   const sendMessage = useCallback(async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || isLoading) return;
+    // isProcessingRef is a synchronous atomic guard — no stale closure issue
+    if (!trimmed || isProcessingRef.current) return;
+
+    isProcessingRef.current = true;  // Lock immediately — before any async/state update
+    setIsLoading(true);
 
     const userMsg: ChatMessage = {
       id: generateId(),
@@ -107,13 +121,13 @@ export function AIChatbot({ onSuggestDisease }: AIChatbotProps) {
       timestamp: new Date(),
     };
 
+    // Use functional updater so we never rely on stale state
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
-    setIsLoading(true);
 
     try {
-      // Build history for API (last 8 messages)
-      const history = [...messages, userMsg]
+      // Build history from ref — always fresh, no stale closure
+      const history = [...messagesRef.current, userMsg]
         .slice(-8)
         .map(m => ({ role: m.role, content: m.content }));
 
@@ -168,9 +182,10 @@ export function AIChatbot({ onSuggestDisease }: AIChatbotProps) {
         quick_replies: ['Dobara try karein', 'Seedha report upload karein'],
       }]);
     } finally {
+      isProcessingRef.current = false;  // Unlock — new messages now allowed
       setIsLoading(false);
     }
-  }, [messages, isLoading, isOpen, sessionId]);
+  }, [isOpen, sessionId]);  // Removed `messages` & `isLoading` — now using refs instead
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -228,8 +243,8 @@ export function AIChatbot({ onSuggestDisease }: AIChatbotProps) {
       <div
         className="fixed bottom-24 right-6 z-50 flex flex-col transition-all duration-300 origin-bottom-right"
         style={{
-          width: 'min(380px, calc(100vw - 24px))',
-          height: '540px',
+          width: 'min(460px, calc(100vw - 24px))',
+          height: '620px',
           opacity: isOpen ? 1 : 0,
           transform: isOpen ? 'scale(1) translateY(0)' : 'scale(0.8) translateY(20px)',
           pointerEvents: isOpen ? 'auto' : 'none',

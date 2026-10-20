@@ -72,14 +72,27 @@ REGEX_PATTERNS = {
         r"blood\s+pressure[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "chol": [
+        # Exact key=value formats (highest priority — catches OCR key: value output)
+        r"\bchol\s*[:=\-]\s*(\d+\.?\d*)",
+        r"chol(?:esterol)?\s*[:=\-]\s*(\d+\.?\d*)",
+        # Space-separated (OCR table output like "chol   233")
+        r"\bchol\b\s+(\d+\.?\d*)",
+        # Longer descriptive labels
         r"(?:serum\s+)?total\s+cholesterol\s*[:=\-]?\s*(\d+\.?\d*)",
-        r"chol(?:esterol)?\s*[:=\-]?\s*(\d+\.?\d*)",
+        r"(?:serum\s+)?total\s+cholesterol\s+(\d+\.?\d*)",
+        # Looser fallback patterns
         r"\bchol\b[^0-9]{0,20}?(\d+\.?\d*)",
         r"(?:serum\s+)?total\s+cholesterol[^0-9]{0,20}?(\d+\.?\d*)",
         r"cholesterol[^0-9]{0,20}?(\d+\.?\d*)",
     ],
     "fbs": [
-        r"(?:fasting\s+(?:blood\s+)?(?:glucose|sugar)|fasting\s+sugar|fbs)\s*[:=\-]?\s*(\d+\.?\d*)",
+        # Exact key=value formats (highest priority)
+        r"\bfbs\s*[:=\-]\s*(\d+\.?\d*)",
+        r"(?:fasting\s+(?:blood\s+)?(?:glucose|sugar)|fasting\s+sugar|fbs)\s*[:=\-]\s*(\d+\.?\d*)",
+        # Space-separated key value (OCR table output)
+        r"\bfbs\b\s+(\d+\.?\d*)",
+        r"fasting\s+(?:blood\s+)?(?:glucose|sugar)\s+(\d+\.?\d*)",
+        # Looser patterns for table/grid format
         r"\bfbs\b[^0-9]{0,20}?(\d+\.?\d*)",
         r"fasting\s+(?:blood\s+)?(?:glucose|sugar)[^0-9]{0,30}?(\d+\.?\d*)",
         r"fasting\s+sugar[^0-9]{0,20}?(\d+\.?\d*)",

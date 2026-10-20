@@ -7,13 +7,14 @@ import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import { createWorker } from "tesseract.js";
 
-dotenv.config();
+dotenv.config({ override: true });
 
 const PORT = 3000;
 const ML_DIR = path.join(process.cwd(), "ml_models");
 const PREDICT_SCRIPT = path.join(ML_DIR, "predict.py");
 
 // Initialize Gemini Client safely
+const GEMINI_MODEL = "gemini-3.5-flash-lite";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 let aiClient: GoogleGenAI | null = null;
 if (GEMINI_API_KEY && GEMINI_API_KEY !== "MY_GEMINI_API_KEY") {
@@ -218,7 +219,7 @@ Respond ONLY with valid JSON in this exact schema:
 If valid with >= 3 parameters, set "is_valid_medical_report": true, "rejection_reason": null, populate "extracted_parameters" with the exact numeric values found, and fill missing/dangerous parameters appropriately.`;
             const cleanBase64 = fileBase64.replace(/^data:.*?;base64,/, "");
             const geminiPromise = aiClient.models.generateContent({
-              model: "gemini-1.5-flash",
+              model: GEMINI_MODEL,
               contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mimeType || "image/jpeg", data: cleanBase64 } }] }]
             });
             const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Gemini timeout")), 12000));
@@ -356,7 +357,7 @@ If VALID ECG, perform analysis and respond strictly in JSON format:
 `;
         const cleanBase64 = imageBase64.replace(/^data:.*?;base64,/, "");
         const response = await aiClient.models.generateContent({
-          model: "gemini-1.5-flash",
+          model: GEMINI_MODEL,
           contents: [
             {
               role: "user",
@@ -448,7 +449,7 @@ If VALID CT SCAN, perform analysis and respond strictly in JSON format:
 `;
         const cleanBase64 = imageBase64.replace(/^data:.*?;base64,/, "");
         const response = await aiClient.models.generateContent({
-          model: "gemini-1.5-flash",
+          model: GEMINI_MODEL,
           contents: [
             {
               role: "user",
@@ -528,7 +529,7 @@ Return JSON strictly:
 }
 `;
         const response = await aiClient.models.generateContent({
-          model: "gemini-1.5-flash",
+          model: GEMINI_MODEL,
           contents: [{ role: "user", parts: [{ text: prompt }] }]
         });
 
@@ -622,7 +623,7 @@ Respond strictly in JSON format:
 }
 `;
         const response = await aiClient.models.generateContent({
-          model: "gemini-1.5-flash",
+          model: GEMINI_MODEL,
           contents: [{ role: "user", parts: [{ text: prompt }] }]
         });
 
@@ -700,7 +701,7 @@ Return JSON strictly:
 }
 `;
         const response = await aiClient.models.generateContent({
-          model: "gemini-1.5-flash",
+          model: GEMINI_MODEL,
           contents: [{ role: "user", parts: [{ text: prompt }] }]
         });
 
@@ -772,99 +773,93 @@ Return JSON strictly:
       // GEMINI AI SOUL MODE
       if (aiClient) {
         try {
-          const systemInstruction = `Tu Dr. Aria hai — ek bahut hi samajhdaar, warm aur caring medical AI assistant. Tu Hinglish mein baat karta hai — Hindi aur English ka natural, dosti bhari mix. Teri soul Gemini se aati hai — tu intelligent, empathetic aur helpful hai.
+          const systemInstruction = `Tu Dr. Aria hai — ek bahut hi knowledgeable, caring aur empathetic AI medical assistant (Gemini Powered). Tu Hinglish mein baat karta hai jaise official Google Gemini baat karta hai.
 
-TERI PERSONALITY (GEMINI SOUL):
-- Tu ek caring dost ki tarah baat karta hai — warm, natural, bilkul robotic nahi
-- Pehle sunna — empathy dikhana — PHIR helpful advice dena
-- Simple Hinglish, koi heavy medical jargon nahi
-- Short, focused replies — 2-4 lines max, over-explain mat kar
-- Kabhi judge mat kar — har chhoti problem ko bhi seriously le
-- Tu doctor ki jagah nahi hai — sirf sahi direction mein guide kar
-- Thoda natural humor/warmth theek hai — human-like feel
+TERA RESPONSE FORMAT AUR STYLE (REAL GEMINI KI TARAH):
+1. **Friendly, Empathetic Introduction**:
+   - Patient ki baat samjho, unhe aaram se explain karo ki yeh samasya kyun ho sakti hai (aam mamuli karan jaise gas, acidity, dehydration, etc.).
+   - Ek clear soft disclaimer: "Kripya dhyan dein ki main ek AI hoon, doctor nahi. Ye sujhaav kewal aam jankari ke liye hain."
 
-REPORT MAANGNE KE ABSOLUTE RULES (YEH TODNA FORBIDDEN HAI):
+2. **Well-Structured Bullet Points**:
+   - Agar aam samasya (jaise pet dard, bukhar, sir dard, sardi) hai, toh "Gharelu Sujhaav" ya "First-Aid Tips" bullet points mein do:
+     • **Heading**: Short explanation (jaise Garm Pani/Chai, Sikai, Halka Khana, Rest).
+   - Saaf-suthri formatting use karo taaki padhne mein asani ho.
 
-IN SYMPTOMS MEIN suggest_report HAMESHA false RAHEGA:
-- Pet dard / stomach pain / gas / acidity / kabz / diarrhea / indigestion
-- Bukhar / fever / viral fever / sardi / khansi / cold / cough
-- Sir dard / headache / migraine
-- Thakan / fatigue / kamzori (sirf akele)
-- Body pain / muscle pain / joint pain (sirf akele)
-- Ulti aana / nausea (sirf akele)
-- Neend nahi aana / appetite kam
-- Halki takleef ya general "achha nahi lag raha"
-- PEHLE 2 EXCHANGES MEIN KABHI NAHI — chahe kuch bhi ho
+3. **Doctor Ko Kab Dikhayein (Red Flags / Serious Signs)**:
+   - 1-2 points zaroor batao ki agar yeh symptoms hon (tez bukhar, 2-3 din se zyada dard, ulti mein khoon, etc.) toh turant doctor se milein.
 
-suggest_report = true SIRF IN SPECIFIC COMBINATIONS MEIN:
-- HEART: Chest pressure/tightness + saans phoolna + dhadkan tez — TEENO SAATH
-- DIABETES: Extreme pyaas (hamesha) + baar baar peshab + unexplained weight loss — COMBINATION
-- KIDNEY: Peshab bilkul band + haath-paon bahut sooje + kamar tez dard — SERIOUS
-- LIVER: Aankhein/skin PEELI (jaundice) + pet mein tez dard + zyada ulti — JAUNDICE ZAROOR
-- STROKE: Chehra + haath + boli mein kamzori EK SAATH — EMERGENCY (urgency = emergency)
+4. **Follow-up & Tone**:
+   - End mein 1 chhota caring follow-up question poochho (jaise "Dard kitne der se hai?", "Khane ke baad shuru hua kya?").
+   - Tone warm, helpful aur respectful ho.
 
-GENERAL SYMPTOMS KA RESPONSE STYLE:
-- Pet dard: Garam pani, halka khana, Gelusil agar acidity. Follow-up poochho.
-- Bukhar: Paracetamol, rest, pani. 103F+ ya 3 din+ toh doctor.
-- Sir dard: Pani, rest, screen se dur. Stress ya dehydration ho sakta hai.
-- Thakan: Neend check karo, iron/B12, balanced diet. Follow-up questions.
-- Khansi/Sardi: Garam kadha, steam, rest. 1 hafte se zyada toh doctor.
+REPORT MAANGNE KE RULES:
+- Pet dard, bukhar, sir dard, thakan, acidity, sardi-khansi mein suggest_report HAMESHA false rahega.
+- suggest_report = true SIRF tabhi hoga jab patient serious multi-symptom pattern bata raha ho (Heart chest pain + saans band, ya Diabetes extreme thirst + excessive urination, etc.).
 
-CONVERSATION FLOW:
-- Exchange 1-2: Empathetic follow-up questions ONLY — koi report suggestion nahi
-- Exchange 3+: Pattern identify karo, clear actionable advice do
-- Agar symptoms serious nahi hain: home remedies + follow-up questions
-- Agar truly serious combination hai: toh suggest karo
-
-EXACT JSON FORMAT (KOI BHATAK MAT — SIRF YEH STRUCTURE):
+EXACT JSON FORMAT:
 {
-  "reply": "Teri warm, helpful Hinglish reply — 2-4 lines, dil se",
+  "reply": "Pura comprehensive, well-formatted Hinglish response (real Gemini style mein headings aur bullets ke saath)",
   "detected_disease": "heart|diabetes|kidney|liver|stroke|other|null",
   "confidence": "High|Moderate|Low|null",
   "suggest_report": false,
   "suggest_disease_tab": "heart|diabetes|kidney|liver|stroke|other|null",
   "urgency": "normal|urgent|emergency",
-  "quick_replies": ["Natural Hinglish option 1", "Option 2", "Option 3"]
-}
-
-FINAL REMINDER: Pet dard, bukhar, sir dard, thakan = suggest_report HAMESHA false. Koi exceptions nahi.`;
+  "quick_replies": ["Aam sujhaav chahiye", "Dard kaafi tez hai", "Doctor ke paas kab jaana chahiye?"]
+}`;
 
           // Build conversation for Gemini
-          const conversationHistory = messages.map((m) => ({
+          // Filter: skip leading assistant messages — Gemini requires conversation to start with 'user'
+          const rawHistory = messages.map((m) => ({
             role: m.role === "assistant" ? ("model" as const) : ("user" as const),
             parts: [{ text: m.content }]
           }));
+          const firstUserIdx = rawHistory.findIndex(m => m.role === "user");
+          const conversationHistory = firstUserIdx >= 0 ? rawHistory.slice(firstUserIdx) : rawHistory;
 
-          const geminiPromise = aiClient.models.generateContent({
-            model: "gemini-2.0-flash",
-            contents: conversationHistory,
-            config: {
-              systemInstruction,
-              temperature: 0.65,
-              maxOutputTokens: 700,
-              responseMimeType: "application/json",
+          const callGeminiWithFallback = async () => {
+            const modelsToTry = ["gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.1-flash-lite"];
+            let lastErr = null;
+            for (const modelName of modelsToTry) {
+              try {
+                return await aiClient.models.generateContent({
+                  model: modelName,
+                  contents: conversationHistory,
+                  config: {
+                    systemInstruction,
+                    temperature: 0.65,
+                    maxOutputTokens: 700,
+                  }
+                });
+              } catch (err: any) {
+                lastErr = err;
+                console.warn(`[Chatbot] Model ${modelName} failed (${err.status || err.message}), trying next...`);
+              }
             }
-          });
+            throw lastErr || new Error("All Gemini models failed");
+          };
 
           const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Gemini chatbot timeout")), 15000)
+            setTimeout(() => reject(new Error("Gemini chatbot timeout")), 25000)
           );
 
-          const response = await Promise.race([geminiPromise, timeoutPromise]) as any;
+          const response = await Promise.race([callGeminiWithFallback(), timeoutPromise]) as any;
+
           const rawText: string = response.text || "{}";
 
-          // Parse JSON — responseMimeType guarantees clean JSON from Gemini
+          // Extract JSON from plain text response (Gemini wraps it in ```json ... ``` sometimes)
           let parsed: any;
           try {
             parsed = JSON.parse(rawText);
           } catch {
-            const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+            const jsonMatch = rawText.match(/```json\s*([\s\S]*?)```/) ||
+                             rawText.match(/(\{[\s\S]*\})/);
             if (jsonMatch) {
-              try { parsed = JSON.parse(jsonMatch[0]); } catch { parsed = {}; }
+              try { parsed = JSON.parse(jsonMatch[1] || jsonMatch[0]); } catch { parsed = {}; }
             } else {
               parsed = {};
             }
           }
+
 
           if (parsed && parsed.reply) {
             // SAFETY GUARD: Double-check — general symptoms never get report suggestion
